@@ -1,0 +1,55 @@
+{
+  "user_id": "local_user",
+  "base_currency": "USD",
+  "llm": {
+    "provider": "local_template",
+    "model": "local-template",
+    "api_key": "",
+    "base_url": ""
+  },
+  "channels": [
+    {
+      "channel_id": "local_cli",
+      "channel_type": "cli",
+      "enabled": true,
+      "credentials": {},
+      "options": {}
+    },
+    {
+      "channel_id": "local_jsonl",
+      "channel_type": "jsonl",
+      "enabled": true,
+      "credentials": {},
+      "options": {
+        "inbox": "messages/inbox.jsonl",
+        "outbox": "messages/outbox.jsonl"
+      }
+    },
+    {
+      "channel_id": "telegram_personal",
+      "channel_type": "telegram",
+      "enabled": false,
+      "credentials": {
+        "bot_token": ""
+      },
+      "options": {
+        "timeout": "20"
+      }
+    }
+  ],
+  "market_data": {
+    "provider": "demo",
+    "api_key": "",
+    "base_url": "",
+    "mode": "local"
+  },
+  "storage": {
+    "audit_dir": "audit_runs",
+    "message_dir": "messages"
+  },
+  "risk_preferences": {
+    "max_single_position_weight": 0.25,
+    "high_volatility_20d": 0.04,
+    "max_largest_position_weight": 0.35
+  }
+}

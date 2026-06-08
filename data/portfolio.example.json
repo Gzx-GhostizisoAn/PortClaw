@@ -1,0 +1,34 @@
+{
+  "user_id": "local_user",
+  "base_currency": "USD",
+  "cash": 380.0,
+  "positions": [
+    {
+      "symbol": "AAPL",
+      "name": "Apple Inc.",
+      "sector": "Technology",
+      "quantity": 10,
+      "average_cost": 175.0,
+      "market_price": 210.0
+    },
+    {
+      "symbol": "MSFT",
+      "name": "Microsoft Corp.",
+      "sector": "Technology",
+      "quantity": 6,
+      "average_cost": 380.0,
+      "market_price": 420.0
+    }
+  ],
+  "watchlist": [
+    {
+      "symbol": "NVDA",
+      "name": "NVIDIA Corp.",
+      "sector": "Technology",
+      "latest_price": 1160.0,
+      "moving_average_20d": 1120.0,
+      "moving_average_60d": 1080.0,
+      "volatility_20d": 0.039
+    }
+  ]
+}
