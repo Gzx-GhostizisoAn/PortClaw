@@ -1,6 +1,23 @@
+# Core runtime
 pydantic>=2.7.0
 pandas>=2.2.0
 numpy>=1.26.0
 python-dotenv>=1.0.1
+
+# Optional LLM client. Needed when using qwen/openai/deepseek/openai_compatible instead of local_template.
 openai>=1.40.0
+
+# Implemented market/news adapter
 yfinance>=0.2.40
+
+# HTTP client used by credentialed REST data adapters such as FRED, FMP, EODHD, Twelve Data, and Alpha Vantage.
+requests>=2.32.0
+
+# Planned market-data adapter libraries. They are listed here so a full local install has the expected clients available.
+akshare>=1.16.0
+efinance>=0.5.7
+ccxt>=4.4.0
+fredapi>=0.5.2
+tushare>=1.4.21
+alpha-vantage>=3.0.0
+rqdatac>=3.5.0

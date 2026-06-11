@@ -60,11 +60,14 @@ Signals remain separate evidence. News enters through `NewsImpact`, so the theme
 
 ## 4. Portfolio Relevance Weighting
 
-News impact is portfolio-specific:
+News impact is portfolio-specific and nonlinear:
 
 ```text
-news_impact = event_severity * portfolio_exposure * relevance_score
+base_impact = event_severity * portfolio_exposure * relevance_score
+news_impact = base_impact * amplification_factor
 ```
+
+The amplification factor increases risk when event severity is high, the portfolio has concentrated exposure, similar events are clustered, or the event is classified as negative sentiment.
 
 Examples:
 
@@ -86,4 +89,3 @@ priority_score = metric_score * 50% + signal_score * 25% + news_impact_score * 2
 ```
 
 The LLM receives the final ranked `risk_themes` plus the underlying `news_layer` details. It explains structured conclusions only; it does not classify raw news on its own.
-

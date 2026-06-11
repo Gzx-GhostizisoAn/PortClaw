@@ -28,6 +28,13 @@ SEVERITY_RANK = {
 }
 
 
+CONCENTRATION_METRIC_WEIGHTS = {
+    "top_holding_weight": 0.45,
+    "top_sector_weight": 0.35,
+    "portfolio_hhi": 0.20,
+}
+
+
 @dataclass(frozen=True)
 class ThemeDefinition:
     theme_key: str
@@ -48,8 +55,13 @@ THEME_DEFINITIONS = [
     ThemeDefinition(
         theme_key="volatility_risk",
         title="Volatility risk",
-        signal_rules={"asset_volatility_high"},
-        signal_metric_names={"asset.volatility_20d", "portfolio.volatility_20d", "asset.max_drawdown_60d"},
+        signal_rules={"asset_volatility_high", "portfolio_daily_loss"},
+        signal_metric_names={
+            "asset.volatility_20d",
+            "portfolio.volatility_20d",
+            "asset.max_drawdown_60d",
+            "portfolio.daily_return",
+        },
         base_action=RecommendedAction.WATCH,
     ),
     ThemeDefinition(
@@ -161,9 +173,30 @@ class RiskThemeEngine:
             drivers.append(f"Top sector {top_sector.name} is {sector_weight:.1%}.")
 
         metrics = [
-            self._metric("top_holding_weight", largest, 0.35, "portfolio_metrics", "Largest single-name portfolio weight."),
-            self._metric("portfolio_hhi", hhi, 0.25, "portfolio_metrics", "Herfindahl-Hirschman concentration index."),
-            self._metric("top_sector_weight", sector_weight, 0.50, "portfolio_metrics.exposures", "Largest sector exposure."),
+            self._metric(
+                "top_holding_weight",
+                largest,
+                0.35,
+                "portfolio_metrics",
+                "Largest single-name portfolio weight.",
+                weight=CONCENTRATION_METRIC_WEIGHTS["top_holding_weight"],
+            ),
+            self._metric(
+                "top_sector_weight",
+                sector_weight,
+                0.50,
+                "portfolio_metrics.exposures",
+                "Largest sector exposure.",
+                weight=CONCENTRATION_METRIC_WEIGHTS["top_sector_weight"],
+            ),
+            self._metric(
+                "portfolio_hhi",
+                hhi,
+                0.25,
+                "portfolio_metrics",
+                "Herfindahl-Hirschman concentration index, used as a portfolio-wide diversification summary.",
+                weight=CONCENTRATION_METRIC_WEIGHTS["portfolio_hhi"],
+            ),
         ]
         return self._theme(
             "concentration_risk",
@@ -188,11 +221,15 @@ class RiskThemeEngine:
         avg_vol = sum(vols) / len(vols) if vols else portfolio_metrics.volatility_20d or 0.0
         worst_drawdown = max(drawdowns) if drawdowns else abs(portfolio_metrics.max_drawdown_60d or 0.0)
         avg_beta = sum(betas) / len(betas) if betas else abs(portfolio_metrics.beta_to_benchmark or 0.0)
+        same_day_loss = abs(portfolio_metrics.daily_return or 0.0) if (portfolio_metrics.daily_return or 0.0) < 0 else 0.0
         drivers = self._top_metric_symbols(asset_metrics.values(), "volatility_20d", "High volatility")
+        if portfolio_metrics.daily_return is not None:
+            drivers.append(f"Same-day portfolio return is {portfolio_metrics.daily_return:.2%}.")
         metrics = [
             self._metric("asset_or_portfolio_volatility_20d", avg_vol, 0.04, "asset_metrics", "Average available 20-day volatility."),
             self._metric("max_drawdown_60d", worst_drawdown, 0.12, "asset_metrics", "Worst available 60-day drawdown magnitude."),
             self._metric("beta_to_benchmark", avg_beta, 1.20, "asset_metrics", "Average available beta magnitude."),
+            self._metric("same_day_portfolio_loss", same_day_loss, 0.03, "portfolio_metrics.daily_return", "Magnitude of same-day portfolio loss from latest and previous close."),
         ]
         return self._theme("volatility_risk", "Volatility risk", metrics, signals, drivers, RecommendedAction.WATCH, news_impacts)
 
@@ -297,12 +334,20 @@ class RiskThemeEngine:
             needs_human_review=priority_score >= 70 or any(item.needs_human_review for item in signals),
         )
 
-    def _metric(self, name: str, value: float, threshold: float, source: str, explanation: str) -> RiskThemeMetric:
+    def _metric(
+        self,
+        name: str,
+        value: float,
+        threshold: float,
+        source: str,
+        explanation: str,
+        weight: float = 1.0,
+    ) -> RiskThemeMetric:
         contribution = min(1.0, value / threshold) if threshold > 0 else 0.0
         return RiskThemeMetric(
             metric_name=name,
             value=value,
-            weight=1.0,
+            weight=weight,
             contribution=contribution,
             source=source,
             explanation=explanation,

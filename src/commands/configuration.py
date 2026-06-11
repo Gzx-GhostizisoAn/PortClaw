@@ -166,8 +166,14 @@ def cmd_models(_: argparse.Namespace) -> None:
 
 def cmd_data_sources(_: argparse.Namespace) -> None:
     for provider, meta in available_market_data_providers().items():
-        key_note = "requires API key" if meta["requires_api_key"] else "no API key"
-        print(f"{provider}: {meta['label']} [{meta['category']}] ({key_note})")
+        status = str(meta.get("status", "planned"))
+        auth_type = str(meta.get("auth_type", "api_key" if meta["requires_api_key"] else "none"))
+        key_note = "requires credentials" if meta["requires_api_key"] else "no API key"
+        if auth_type in {"api_key", "token"}:
+            key_note = "requires API key/token"
+        env_vars = ", ".join(str(item) for item in meta.get("env_vars", [])) or "none"
+        print(f"{provider}: {meta['label']} [{meta['category']}] ({key_note}; {status})")
+        print(f"  auth: {auth_type}; env: {env_vars}")
         print(f"  {meta['description']}")
 
 

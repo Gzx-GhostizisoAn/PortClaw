@@ -50,17 +50,32 @@ List market data providers:
 python agent.py data-sources
 ```
 
-Free source:
+Free or public source:
 
 ```bash
 python agent.py configure --market-provider yahoo
+python agent.py configure --market-provider akshare
+python agent.py configure --market-provider efinance
+python agent.py configure --market-provider ccxt
 ```
 
-Commercial source:
+Credentialed source:
 
 ```bash
 python agent.py configure --market-provider eodhd --market-api-key "YOUR_EODHD_KEY"
+python agent.py configure --market-provider fred --market-api-key "YOUR_FRED_KEY"
+python agent.py configure --market-provider fmp --market-api-key "YOUR_FMP_KEY"
+python agent.py configure --market-provider tushare --market-api-key "YOUR_TUSHARE_TOKEN"
+python agent.py configure --market-provider alpha_vantage --market-api-key "YOUR_ALPHA_VANTAGE_KEY"
+python agent.py configure --market-provider rqdata --market-api-key "USERNAME:PASSWORD_OR_LICENSE"
 ```
+
+Provider credential notes:
+
+- `yahoo`, `akshare`, and `efinance` are public/free Python-library style sources and do not use API keys in PortClaw config.
+- `ccxt` public market data usually does not require a key, but private exchange account or trading methods require exchange-specific credentials.
+- `fred`, `fmp`, `tushare`, `alpha_vantage`, `rqdata`, `eodhd`, and `twelve_data` require keys, tokens, or account/license credentials.
+- The implemented Tushare adapter currently fetches China-market daily history for Tushare `ts_code` symbols such as `600519.SH`, `000001.SZ`, or plain six-digit A-share codes.
 
 ## 3. Run CLI Agent
 

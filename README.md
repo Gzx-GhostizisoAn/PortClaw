@@ -81,12 +81,28 @@ portfolio
 help
 ```
 
+Any other chat text is treated as a portfolio question. If a remote LLM provider is configured with a key, PortClaw sends the structured `DailyBrief` plus the user question to that model. If the provider is configured but the key/client/API call is unavailable, the response says that the remote LLM was not used and shows the local fallback instead.
+
 ## Configuration
 
-Use the setup wizard for the easiest local configuration:
+PortClaw reads local configuration from `config/local_config.json`. You can create it from the safe template with:
+
+```bash
+python agent.py init
+```
+
+The file is private runtime state and is ignored by git. API keys can be stored either in `config/local_config.json` or in `.env`; environment variables take priority when present.
+
+Use the setup wizard for the easiest interactive configuration:
 
 ```bash
 python agent.py setup
+```
+
+Inspect the active config with secrets masked:
+
+```bash
+python agent.py config-show
 ```
 
 List supported model and data-source options:
@@ -96,12 +112,63 @@ python agent.py models
 python agent.py data-sources
 ```
 
-Configure market data:
+### Config File Fields
 
-```bash
-python agent.py configure --market-provider yahoo
-python agent.py configure --market-provider eodhd --market-api-key "YOUR_EODHD_KEY"
+`config/local_config.json` has these top-level sections:
+
+| Field | Meaning |
+| --- | --- |
+| `user_id` | Local user identifier written into portfolio snapshots and audit records. |
+| `base_currency` | Reporting currency label, such as `USD`, `CNY`, or `HKD`. PortClaw does not yet do FX conversion automatically. |
+| `llm` | Model provider settings for report generation and question answering. |
+| `channels` | Message input/output channels such as CLI, local JSONL, or Telegram. |
+| `market_data` | Public market-data provider used for price/history/news enrichment. |
+| `storage` | Local folders for audit files and message gateway files. |
+| `risk_preferences` | User-adjustable thresholds for concentration and volatility rules. |
+
+Example:
+
+```json
+{
+  "user_id": "local_user",
+  "base_currency": "USD",
+  "llm": {
+    "provider": "local_template",
+    "model": "local-template",
+    "api_key": "",
+    "base_url": ""
+  },
+  "market_data": {
+    "provider": "demo",
+    "api_key": "",
+    "base_url": "",
+    "mode": "local"
+  },
+  "storage": {
+    "audit_dir": "audit_runs",
+    "message_dir": "messages"
+  },
+  "risk_preferences": {
+    "max_single_position_weight": 0.25,
+    "high_volatility_20d": 0.04,
+    "max_largest_position_weight": 0.35
+  }
+}
 ```
+
+### LLM Settings
+
+`llm.provider` controls who writes the final narrative report:
+
+| Provider | Key Needed | Notes |
+| --- | --- | --- |
+| `local_template` | No | Deterministic local report, no network model call. |
+| `qwen` | Yes | OpenAI-compatible DashScope endpoint by default. |
+| `openai` | Yes | Uses the OpenAI Python client. |
+| `deepseek` | Yes | Uses the DeepSeek OpenAI-compatible endpoint. |
+| `openai_compatible` | Yes | For any custom OpenAI-compatible endpoint; set `model` and `base_url`. |
+
+`llm.model` is the model name sent to the provider. `llm.api_key` is the provider token. `llm.base_url` is usually blank unless the provider uses an OpenAI-compatible custom endpoint.
 
 Configure an LLM provider:
 
@@ -112,6 +179,20 @@ python agent.py configure --llm-provider deepseek --llm-model deepseek-v4-flash 
 python agent.py configure --llm-provider openai_compatible --llm-model "your-model" --llm-api-key "YOUR_KEY" --llm-base-url "http://localhost:11434/v1"
 ```
 
+In chat, exact commands such as `status`, `daily`, and `portfolio` run local commands. Free-form questions such as `what is my portfolio status?` or `我现在组合最大的风险是什么？` go through the model-backed question path when the LLM is ready.
+
+### Market Data Settings
+
+`market_data.provider` selects the public data source. `market_data.api_key` stores a provider key, token, or account credential when required. `market_data.base_url` is for custom endpoints and is normally blank. `market_data.mode` is normalized from the provider category, such as `local`, `free`, `macro`, `freemium`, or `commercial`.
+
+Configure market data:
+
+```bash
+python agent.py configure --market-provider yahoo
+python agent.py configure --market-provider fred --market-api-key "YOUR_FRED_KEY"
+python agent.py configure --market-provider fmp --market-api-key "YOUR_FMP_KEY"
+```
+
 Environment variables in `.env` are also supported:
 
 ```text
@@ -120,30 +201,109 @@ OPENAI_API_KEY=
 DEEPSEEK_API_KEY=
 EODHD_API_KEY=
 TWELVE_DATA_API_KEY=
+FRED_API_KEY=
+FMP_API_KEY=
+TUSHARE_TOKEN=
+ALPHA_VANTAGE_API_KEY=
+RQDATA_USERNAME=
+RQDATA_PASSWORD=
+CCXT_EXCHANGE=
+CCXT_API_KEY=
+CCXT_SECRET=
 ```
+
+When multiple market-data environment variables are set, PortClaw uses the first match in this priority order: `EODHD_API_KEY`, `TWELVE_DATA_API_KEY`, `FRED_API_KEY`, `FMP_API_KEY`, `TUSHARE_TOKEN`, `ALPHA_VANTAGE_API_KEY`, then `RQDATA_USERNAME` plus `RQDATA_PASSWORD`.
+
+### Channel Settings
+
+Each channel entry has:
+
+| Field | Meaning |
+| --- | --- |
+| `channel_id` | Local name, for example `local_cli`, `local_jsonl`, or `telegram_personal`. |
+| `channel_type` | Adapter type such as `cli`, `jsonl`, or `telegram`. |
+| `enabled` | Whether the channel should run. |
+| `credentials` | Secret values such as a Telegram bot token. These are masked by `config-show`. |
+| `options` | Adapter-specific settings such as JSONL inbox/outbox paths or polling timeout. |
+
+Configure a Telegram channel:
+
+```bash
+python agent.py configure-channel --channel-id telegram_personal --channel-type telegram --credential bot_token="YOUR_TELEGRAM_BOT_TOKEN" --option timeout=20
+```
+
+### Risk Preferences
+
+`risk_preferences` controls deterministic rule thresholds:
+
+| Field | Meaning |
+| --- | --- |
+| `max_single_position_weight` | Position weight above this level triggers single-name concentration review. |
+| `high_volatility_20d` | 20-day volatility above this level is treated as high volatility. |
+| `max_largest_position_weight` | Largest-position threshold used in portfolio-level concentration scoring. |
 
 ## Market Data And News
 
-Current market-data providers:
+Current market-data providers and status:
 
-- `demo`: local sample data for testing.
-- `yahoo`: free public market data through Yahoo Finance/yfinance.
-- `akshare`: configured option for China-market public data adapters.
-- `eodhd`: configured commercial provider option.
-- `twelve_data`: configured commercial provider option.
+| Provider | Status | Auth | Intended Use |
+| --- | --- | --- | --- |
+| `demo` | Implemented | None | Local sample data for testing. |
+| `yahoo` | Implemented | None | Free public history and yfinance news. |
+| `akshare` | Planned | None | China-market public data through AKShare. |
+| `efinance` | Planned | None | China-market public quote/history data through efinance. |
+| `ccxt` | Planned | Public market data usually keyless | Crypto exchange OHLCV/tickers; private account/trading needs exchange credentials. |
+| `fred` | Planned | `FRED_API_KEY` | Macro series from FRED. |
+| `fmp` | Planned | `FMP_API_KEY` | Prices, fundamentals, ratios, calendars, and market data from Financial Modeling Prep. |
+| `tushare` | Implemented | `TUSHARE_TOKEN` | Tushare Pro China-market daily history for symbols such as `600519.SH`, `000001.SZ`, or six-digit A-share codes. |
+| `alpha_vantage` | Planned | `ALPHA_VANTAGE_API_KEY` | Market, FX, crypto, fundamental, and macro endpoints. |
+| `rqdata` | Planned | Account/license credentials | Ricequant/RQData China-market data. |
+| `eodhd` | Planned | `EODHD_API_KEY` | Commercial EOD, fundamentals, and news data. |
+| `twelve_data` | Planned | `TWELVE_DATA_API_KEY` | Commercial unified market data. |
+
+Run `python agent.py data-sources` to see each provider's category, implementation status, auth type, and supported environment variables.
 
 Current news layer:
 
 - yfinance news collection when the market provider is `yahoo`.
 - Unified `NewsItem` schema.
 - Keyword event classification into macro, industry, and company events.
-- Portfolio-specific impact scoring:
+- Portfolio-specific impact scoring with nonlinear amplification:
 
 ```text
-news_impact = event_severity * portfolio_exposure * relevance_score
+base_impact = event_severity * portfolio_exposure * relevance_score
+news_impact = base_impact * amplification_factor
 ```
 
-SEC, AKShare, EODHD, and Twelve Data news adapters can be added behind the same `NewsItem` contract.
+The amplification factor raises event risk when severity, portfolio exposure, repeated similar events, or negative sentiment can make the outcome nonlinear.
+
+SEC, AKShare, efinance, FMP, Alpha Vantage, EODHD, and Twelve Data news adapters can be added behind the same `NewsItem` contract.
+
+## Dependencies
+
+`requirements.txt` includes the core runtime, the implemented Yahoo/yfinance and Tushare adapters, the OpenAI-compatible LLM client, and planned data-source clients for AKShare, efinance, CCXT, FRED, Alpha Vantage, and RQData.
+
+If an optional commercial SDK is unavailable for your platform or subscription, the corresponding provider can still be represented in config, but its adapter should fail clearly rather than silently fabricating data.
+
+## Holdings Input
+
+Use the guided holdings wizard:
+
+```bash
+python agent.py holdings
+```
+
+At the symbol prompt, these commands are available:
+
+| Command | Meaning |
+| --- | --- |
+| `save` or `done` | Stop entering positions, review the list, and save. |
+| `cancel`, `exit`, or `quit` | Exit without saving. |
+| `list` | Show positions already entered in this session. |
+| `remove` | Remove the last entered position. |
+| `remove 2` | Remove a specific row from the entered list. |
+
+The wizard saves to `data/portfolio.local.json` by default. This file is private local state and is ignored by git.
 
 ## Message Channels
 

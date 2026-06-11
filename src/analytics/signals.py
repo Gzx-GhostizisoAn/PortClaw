@@ -43,6 +43,14 @@ DEFAULT_RULES = [
         thresholds={"largest_position_weight": 0.35},
     ),
     Rule(
+        rule_id="portfolio_daily_loss",
+        name="Portfolio daily loss",
+        signal_type=SignalType.MARKET_RISK,
+        description="Flags portfolios with material same-day drawdowns based on latest and previous close.",
+        severity=Severity.MEDIUM,
+        thresholds={"daily_return": -0.02},
+    ),
+    Rule(
         rule_id="trend_candidate",
         name="Trend strategy candidate",
         signal_type=SignalType.STRATEGY_SCAN,
@@ -75,6 +83,8 @@ class RuleEngine:
                 signals.extend(self._asset_volatility_signals(rule, metric_by_symbol))
             elif rule.rule_id == "portfolio_concentration_high":
                 signals.extend(self._portfolio_concentration_signal(rule, portfolio_metrics))
+            elif rule.rule_id == "portfolio_daily_loss":
+                signals.extend(self._portfolio_daily_loss_signal(rule, portfolio_metrics))
             elif rule.rule_id == "trend_candidate":
                 signals.extend(self._trend_candidate_signals(rule, snapshot, metric_by_symbol))
 
@@ -169,6 +179,36 @@ class RuleEngine:
                 recommended_action=RecommendedAction.REVIEW,
                 confidence=0.85,
                 needs_human_review=True,
+            )
+        ]
+
+    def _portfolio_daily_loss_signal(self, rule: Rule, metrics: PortfolioMetrics) -> List[Signal]:
+        threshold = rule.thresholds.get("daily_return", -0.02)
+        observed = metrics.daily_return
+        if observed is None or observed >= threshold:
+            return []
+        severity = Severity.HIGH if observed <= -0.05 else rule.severity
+        return [
+            Signal(
+                signal_id=f"sig_{uuid4().hex}",
+                rule_id=rule.rule_id,
+                signal_type=rule.signal_type,
+                scope="portfolio",
+                target=metrics.portfolio_id,
+                severity=severity,
+                title="Portfolio has a material same-day loss",
+                summary=f"The portfolio is down {observed:.2%} based on latest and previous close data.",
+                evidence=[
+                    Evidence(
+                        metric_name="portfolio.daily_return",
+                        observed_value=observed,
+                        threshold=threshold,
+                        explanation="Same-day drawdowns can reveal fast-changing market or event risk.",
+                    )
+                ],
+                recommended_action=RecommendedAction.REVIEW,
+                confidence=0.8,
+                needs_human_review=observed <= -0.05,
             )
         ]
 

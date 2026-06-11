@@ -66,33 +66,120 @@ SUPPORTED_MARKET_DATA_PROVIDERS: Dict[str, Dict[str, object]] = {
         "label": "Demo Local Data",
         "category": "local",
         "requires_api_key": False,
+        "auth_type": "none",
+        "env_vars": [],
+        "status": "implemented",
         "description": "Local sample portfolio and synthetic metrics for testing.",
     },
     "yahoo": {
         "label": "Yahoo Finance",
         "category": "free",
         "requires_api_key": False,
+        "auth_type": "none",
+        "env_vars": [],
+        "status": "implemented",
         "description": "Free public market data via Yahoo Finance/yfinance. Good for quote and history enrichment.",
     },
     "akshare": {
         "label": "AKShare",
         "category": "free",
         "requires_api_key": False,
+        "auth_type": "none",
+        "env_vars": [],
+        "status": "planned",
         "description": "Free public China-market data interfaces, including Eastmoney and other public sources.",
+    },
+    "efinance": {
+        "label": "efinance",
+        "category": "free",
+        "requires_api_key": False,
+        "auth_type": "none",
+        "env_vars": [],
+        "status": "planned",
+        "description": "Free open-source Python library for China-market stocks, funds, futures, and public quote data.",
+    },
+    "ccxt": {
+        "label": "CCXT",
+        "category": "free_public",
+        "requires_api_key": False,
+        "auth_type": "none_for_public_market_data",
+        "env_vars": ["CCXT_EXCHANGE", "CCXT_API_KEY", "CCXT_SECRET"],
+        "status": "planned",
+        "description": "Crypto exchange data through CCXT. Public market data usually needs no key; private account/trading APIs need exchange-specific credentials.",
+    },
+    "fred": {
+        "label": "FRED",
+        "category": "macro",
+        "requires_api_key": True,
+        "auth_type": "api_key",
+        "env_vars": ["FRED_API_KEY"],
+        "status": "planned",
+        "description": "Federal Reserve Economic Data macro series. Requires a FRED API key for web service requests.",
+    },
+    "fmp": {
+        "label": "Financial Modeling Prep",
+        "category": "commercial",
+        "requires_api_key": True,
+        "auth_type": "api_key",
+        "env_vars": ["FMP_API_KEY"],
+        "status": "planned",
+        "description": "Financial Modeling Prep API for prices, fundamentals, ratios, calendars, and market data. Requires an API key.",
+    },
+    "tushare": {
+        "label": "Tushare",
+        "category": "freemium",
+        "requires_api_key": True,
+        "auth_type": "token",
+        "env_vars": ["TUSHARE_TOKEN"],
+        "status": "implemented",
+        "description": "Tushare Pro China-market daily history. Requires a Tushare token and may gate endpoints by points or subscription level.",
+    },
+    "alpha_vantage": {
+        "label": "Alpha Vantage",
+        "category": "freemium",
+        "requires_api_key": True,
+        "auth_type": "api_key",
+        "env_vars": ["ALPHA_VANTAGE_API_KEY"],
+        "status": "planned",
+        "description": "Alpha Vantage market, fundamental, FX, crypto, and macro endpoints. Requires an API key; free keys have limits.",
+    },
+    "rqdata": {
+        "label": "RQData",
+        "category": "commercial",
+        "requires_api_key": True,
+        "auth_type": "account_or_license",
+        "env_vars": ["RQDATA_USERNAME", "RQDATA_PASSWORD"],
+        "status": "planned",
+        "description": "Ricequant/RQData China-market data. Requires account or license credentials, commonly username plus password/license key.",
     },
     "eodhd": {
         "label": "EODHD",
         "category": "commercial",
         "requires_api_key": True,
+        "auth_type": "api_key",
+        "env_vars": ["EODHD_API_KEY"],
+        "status": "planned",
         "description": "Commercial EOD, fundamentals, and news data provider.",
     },
     "twelve_data": {
         "label": "Twelve Data",
         "category": "commercial",
         "requires_api_key": True,
+        "auth_type": "api_key",
+        "env_vars": ["TWELVE_DATA_API_KEY"],
+        "status": "planned",
         "description": "Commercial unified market data provider.",
     },
 }
+
+MARKET_DATA_ENV_KEYS: tuple[tuple[str, str], ...] = (
+    ("eodhd", "EODHD_API_KEY"),
+    ("twelve_data", "TWELVE_DATA_API_KEY"),
+    ("fred", "FRED_API_KEY"),
+    ("fmp", "FMP_API_KEY"),
+    ("tushare", "TUSHARE_TOKEN"),
+    ("alpha_vantage", "ALPHA_VANTAGE_API_KEY"),
+)
 
 
 class LLMConfig(BaseModel):
@@ -168,8 +255,6 @@ def load_config(path: Optional[Path] = None) -> AgentConfig:
     qwen_key = os.getenv("QWEN_API_KEY", "")
     openai_key = os.getenv("OPENAI_API_KEY", "")
     deepseek_key = os.getenv("DEEPSEEK_API_KEY", "")
-    eodhd_key = os.getenv("EODHD_API_KEY", "")
-    twelve_key = os.getenv("TWELVE_DATA_API_KEY", "")
 
     if qwen_key:
         config.llm.provider = "qwen"
@@ -188,12 +273,18 @@ def load_config(path: Optional[Path] = None) -> AgentConfig:
 
     config.llm = normalize_llm_config(config.llm)
 
-    if eodhd_key:
-        config.market_data.provider = "eodhd"
-        config.market_data.api_key = eodhd_key
-    elif twelve_key:
-        config.market_data.provider = "twelve_data"
-        config.market_data.api_key = twelve_key
+    for provider, env_var in MARKET_DATA_ENV_KEYS:
+        value = os.getenv(env_var, "")
+        if value:
+            config.market_data.provider = provider
+            config.market_data.api_key = value
+            break
+    else:
+        rqdata_username = os.getenv("RQDATA_USERNAME", "")
+        rqdata_password = os.getenv("RQDATA_PASSWORD", "")
+        if rqdata_username and rqdata_password:
+            config.market_data.provider = "rqdata"
+            config.market_data.api_key = f"{rqdata_username}:{rqdata_password}"
 
     config.market_data = normalize_market_data_config(config.market_data)
     return config

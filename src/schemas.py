@@ -82,8 +82,11 @@ class Position(BaseModel):
     quantity: float
     average_cost: float
     market_price: Optional[float] = None
+    previous_close: Optional[float] = None
     market_value: Optional[float] = None
     weight: Optional[float] = None
+    daily_pnl: Optional[float] = None
+    daily_pnl_pct: Optional[float] = None
     unrealized_pnl: Optional[float] = None
     unrealized_pnl_pct: Optional[float] = None
     opened_at: Optional[date] = None
@@ -125,6 +128,17 @@ class RawDataSnapshot(BaseModel):
     storage_path: Optional[str] = None
     status: str = "ok"
     error: Optional[str] = None
+
+
+class DataSourceStatus(BaseModel):
+    component: str
+    provider: str
+    status: str
+    used_fields: List[str] = Field(default_factory=list)
+    fallback_fields: List[str] = Field(default_factory=list)
+    affected_symbols: List[str] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
+    note: str = ""
 
 
 class AssetMetrics(BaseModel):
@@ -188,9 +202,12 @@ class NewsImpact(BaseModel):
     event_severity: float = Field(default=0.0, ge=0.0, le=1.0)
     portfolio_exposure: float = Field(default=0.0, ge=0.0, le=1.0)
     relevance_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    base_impact: float = Field(default=0.0, ge=0.0, le=100.0)
+    amplification_factor: float = Field(default=1.0, ge=1.0)
     news_impact: float = Field(default=0.0, ge=0.0, le=100.0)
     affected_symbols: List[str] = Field(default_factory=list)
     rationale: str = ""
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PortfolioMetrics(BaseModel):
@@ -281,6 +298,7 @@ class DailyBrief(BaseModel):
     news_events: List[NewsEvent] = Field(default_factory=list)
     news_impacts: List[NewsImpact] = Field(default_factory=list)
     news_summary: Optional[str] = None
+    data_source_status: List[DataSourceStatus] = Field(default_factory=list)
     human_review_items: List[str] = Field(default_factory=list)
     disclaimer: str = "This report is for research and educational purposes only and is not financial advice."
 

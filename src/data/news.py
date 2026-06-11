@@ -82,6 +82,23 @@ EVENT_RULES = [
         "keywords": {"launch", "product", "chip", "ai", "gpu", "platform", "approval"},
         "theme_keys": ["news_risk", "volatility_risk"],
     },
+    {
+        "event_type": NewsEventType.COMPANY_SENTIMENT,
+        "category": NewsEventCategory.COMPANY,
+        "keywords": {
+            "bearish",
+            "concern",
+            "controversy",
+            "downgrade",
+            "fraud",
+            "negative",
+            "plunge",
+            "sell-off",
+            "slump",
+            "weak demand",
+        },
+        "theme_keys": ["news_risk", "volatility_risk"],
+    },
 ]
 
 
@@ -98,6 +115,9 @@ HIGH_SEVERITY_KEYWORDS = {
     "miss",
     "cut",
     "warning",
+    "fraud",
+    "plunge",
+    "sell-off",
 }
 
 MEDIUM_SEVERITY_KEYWORDS = {
@@ -109,6 +129,8 @@ MEDIUM_SEVERITY_KEYWORDS = {
     "delay",
     "weak",
     "slows",
+    "concern",
+    "controversy",
 }
 
 SECTOR_KEYWORDS = {
@@ -123,27 +145,73 @@ SECTOR_KEYWORDS = {
 class NewsFetcher:
     def __init__(self, config: AgentConfig):
         self.config = config
+        self.last_status: dict[str, object] = {
+            "component": "news",
+            "provider": config.market_data.provider,
+            "status": "not_requested",
+            "errors": [],
+        }
 
     def fetch(self, symbols: Iterable[str], limit_per_symbol: int = 5) -> List[NewsItem]:
         provider = self.config.market_data.provider
+        self.last_status = {
+            "component": "news",
+            "provider": provider,
+            "status": "not_requested",
+            "errors": [],
+        }
         if provider == "yahoo":
-            return self._fetch_yfinance_news(symbols, limit_per_symbol)
-        if provider in {"sec", "akshare", "eodhd", "twelve_data"}:
+            items = self._fetch_yfinance_news(symbols, limit_per_symbol)
+            if items:
+                self.last_status.update({"status": "ok", "item_count": len(items)})
+            elif not self.last_status.get("errors"):
+                self.last_status.update({"status": "empty", "item_count": 0})
+            return items
+        if provider in {
+            "sec",
+            "akshare",
+            "efinance",
+            "ccxt",
+            "fred",
+            "fmp",
+            "tushare",
+            "alpha_vantage",
+            "rqdata",
+            "eodhd",
+            "twelve_data",
+        }:
+            self.last_status.update(
+                {
+                    "status": "not_implemented",
+                    "errors": [f"{provider} news adapter is not implemented yet"],
+                    "item_count": 0,
+                }
+            )
             return []
+        self.last_status.update(
+            {
+                "status": "not_available",
+                "errors": [f"{provider} does not provide a configured news adapter"],
+                "item_count": 0,
+            }
+        )
         return []
 
     def _fetch_yfinance_news(self, symbols: Iterable[str], limit_per_symbol: int) -> List[NewsItem]:
         try:
             import yfinance as yf
         except ImportError:
+            self.last_status.update({"status": "error", "errors": ["yfinance is not installed"], "item_count": 0})
             return []
 
         output: list[NewsItem] = []
         seen: set[tuple[str, str | None]] = set()
+        errors: list[str] = []
         for symbol in sorted(set(symbols)):
             try:
                 raw_items = yf.Ticker(symbol).news or []
-            except Exception:
+            except Exception as exc:
+                errors.append(f"{symbol}: {exc}")
                 continue
             for raw in raw_items[:limit_per_symbol]:
                 item = self._normalize_yfinance_item(raw, symbol)
@@ -152,6 +220,8 @@ class NewsFetcher:
                     continue
                 seen.add(key)
                 output.append(item)
+        if errors:
+            self.last_status.update({"status": "partial" if output else "error", "errors": errors, "item_count": len(output)})
         return output
 
     def _normalize_yfinance_item(self, raw: dict, symbol: str) -> NewsItem:
@@ -229,9 +299,14 @@ class NewsEventClassifier:
 class NewsImpactAnalyzer:
     def analyze(self, snapshot: PortfolioSnapshot, events: List[NewsEvent]) -> List[NewsImpact]:
         impacts: list[NewsImpact] = []
+        event_cluster_counts = self._event_cluster_counts(events)
         for event in events:
             exposure, affected_symbols, rationale = self._portfolio_exposure(snapshot, event)
             relevance = 1.0 if affected_symbols else 0.25 if event.category == NewsEventCategory.MACRO else 0.0
+            cluster_count = self._cluster_count(event, event_cluster_counts)
+            base_impact = round(event.severity_score * exposure * relevance * 100, 2)
+            amplification_factor, amplification_reasons = self._amplification(event, exposure, cluster_count)
+            news_impact = round(min(100.0, base_impact * amplification_factor), 2)
             for theme_key in event.theme_keys:
                 impacts.append(
                     NewsImpact(
@@ -241,12 +316,58 @@ class NewsImpactAnalyzer:
                         event_severity=event.severity_score,
                         portfolio_exposure=exposure,
                         relevance_score=relevance,
-                        news_impact=round(event.severity_score * exposure * relevance * 100, 2),
+                        base_impact=base_impact,
+                        amplification_factor=amplification_factor,
+                        news_impact=news_impact,
                         affected_symbols=affected_symbols,
-                        rationale=rationale,
+                        rationale=self._impact_rationale(rationale, amplification_reasons),
+                        metadata={
+                            "cluster_count": cluster_count,
+                            "amplification_reasons": amplification_reasons,
+                        },
                     )
                 )
         return impacts
+
+    def _event_cluster_counts(self, events: List[NewsEvent]) -> dict[tuple[str, str], int]:
+        counts: dict[tuple[str, str], int] = {}
+        for event in events:
+            symbol_key = ",".join(sorted(symbol.upper() for symbol in event.symbols)) or "macro_or_unknown"
+            key = (event.event_type.value, symbol_key)
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def _cluster_count(self, event: NewsEvent, counts: dict[tuple[str, str], int]) -> int:
+        symbol_key = ",".join(sorted(symbol.upper() for symbol in event.symbols)) or "macro_or_unknown"
+        return counts.get((event.event_type.value, symbol_key), 1)
+
+    def _amplification(self, event: NewsEvent, exposure: float, cluster_count: int) -> tuple[float, list[str]]:
+        factor = 1.0
+        reasons: list[str] = []
+        severity_boost = round((event.severity_score**2) * 0.60, 3)
+        if severity_boost:
+            factor += severity_boost
+            reasons.append(f"severity convexity +{severity_boost:.2f}")
+        exposure_boost = round((exposure**2) * 0.50, 3)
+        if exposure_boost:
+            factor += exposure_boost
+            reasons.append(f"portfolio exposure convexity +{exposure_boost:.2f}")
+        if cluster_count > 1:
+            cluster_boost = min(0.75, (cluster_count - 1) * 0.25)
+            factor += cluster_boost
+            reasons.append(f"similar event cluster +{cluster_boost:.2f}")
+        if event.event_type == NewsEventType.COMPANY_SENTIMENT:
+            factor += 0.30
+            reasons.append("negative sentiment event +0.30")
+        capped = min(2.5, factor)
+        if capped < factor:
+            reasons.append("amplification capped at 2.50")
+        return round(capped, 2), reasons
+
+    def _impact_rationale(self, base_rationale: str, amplification_reasons: list[str]) -> str:
+        if not amplification_reasons:
+            return base_rationale
+        return f"{base_rationale} Nonlinear amplification: {', '.join(amplification_reasons)}."
 
     def _portfolio_exposure(self, snapshot: PortfolioSnapshot, event: NewsEvent) -> tuple[float, list[str], str]:
         symbol_set = {symbol.upper() for symbol in event.symbols}

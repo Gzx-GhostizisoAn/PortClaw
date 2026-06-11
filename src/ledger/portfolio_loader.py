@@ -31,9 +31,13 @@ def load_portfolio_snapshot(
         average_cost = float(item["average_cost"])
         history_result = histories.get(symbol)
         history_price = _latest_history_price(history_result)
+        previous_close = _previous_history_close(history_result)
+        market_data_ok = bool(history_result and history_result.ok)
         market_price = history_price if history_price is not None else float(item["market_price"])
         market_value = quantity * market_price
         cost = quantity * average_cost
+        daily_pnl = quantity * (market_price - previous_close) if previous_close is not None else None
+        previous_value = quantity * previous_close if previous_close is not None else None
         total_market_value += market_value
         total_cost += cost
         positions.append(
@@ -46,12 +50,22 @@ def load_portfolio_snapshot(
                     metadata={
                         "market_data_provider": history_result.provider if history_result else config.market_data.provider,
                         "market_data_error": history_result.error if history_result else None,
+                        "field_sources": {
+                            "market_price": "provider_history" if history_price is not None else "portfolio_file_fallback",
+                            "previous_close": "provider_history" if previous_close is not None else "unavailable",
+                            "daily_pnl": "provider_history" if previous_close is not None else "unavailable",
+                            "market_value": "provider_history" if market_data_ok else "portfolio_file_fallback",
+                            "unrealized_pnl": "provider_history" if market_data_ok else "portfolio_file_fallback",
+                        },
                     },
                 ),
                 quantity=quantity,
                 average_cost=average_cost,
                 market_price=market_price,
+                previous_close=previous_close,
                 market_value=market_value,
+                daily_pnl=daily_pnl,
+                daily_pnl_pct=daily_pnl / previous_value if previous_value else None,
                 unrealized_pnl=market_value - cost,
                 unrealized_pnl_pct=(market_value - cost) / cost if cost else None,
             )
@@ -69,7 +83,11 @@ def load_portfolio_snapshot(
         cash=float(data.get("cash", 0.0)),
         total_market_value=total_market_value,
         total_cost=total_cost,
-        metadata={"source": str(path), "market_data_provider": config.market_data.provider},
+        metadata={
+            "source": str(path),
+            "market_data_provider": config.market_data.provider,
+            "requested_symbols": position_symbols + watchlist_symbols,
+        },
     )
 
     asset_metrics = []
@@ -112,6 +130,12 @@ def _latest_history_price(history_result) -> float | None:
     if not history_result or not history_result.ok:
         return None
     return float(history_result.history["close"].iloc[-1])
+
+
+def _previous_history_close(history_result) -> float | None:
+    if not history_result or not history_result.ok or len(history_result.history) < 2:
+        return None
+    return float(history_result.history["close"].iloc[-2])
 
 
 def _fallback_position_metrics(position: Position, error: str | None) -> AssetMetrics:

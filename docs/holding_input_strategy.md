@@ -84,6 +84,10 @@ For public prices and indicators, the project can later add adapters such as:
 
 - Yahoo Finance/yfinance as a free public source.
 - AKShare for China-market public data, including many public Eastmoney/Tonghuashun-style interfaces.
+- efinance for free China-market public quote and history data.
+- CCXT for crypto public market data, with exchange credentials only when private account/trading APIs are needed.
+- FRED for macro series with a FRED API key.
+- Financial Modeling Prep, Tushare, Alpha Vantage, RQData, EODHD, and Twelve Data for credentialed market, macro, or fundamental data.
 - Eastmoney public quote endpoints through a dedicated adapter.
 - Commercial providers such as EODHD or Twelve Data.
 
@@ -111,5 +115,7 @@ Example commercial source:
 ```bash
 python agent.py configure --market-provider eodhd --market-api-key "YOUR_EODHD_KEY"
 ```
+
+Run `python agent.py data-sources` to see whether each configured source is implemented, planned, free, public, or credentialed.
 
 The LLM should never be asked to infer holdings from screenshots, chat text, or raw brokerage pages without structured confirmation.

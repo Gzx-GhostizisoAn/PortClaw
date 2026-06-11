@@ -6,7 +6,21 @@ import pandas as pd
 
 from ...config import AgentConfig
 from .base import MarketDataResult
+from .tushare import fetch_tushare_history
 from .yahoo import fetch_yahoo_history
+
+
+PLANNED_HISTORY_PROVIDERS = {
+    "akshare",
+    "efinance",
+    "ccxt",
+    "fred",
+    "fmp",
+    "alpha_vantage",
+    "rqdata",
+    "eodhd",
+    "twelve_data",
+}
 
 
 class MarketDataClient:
@@ -17,7 +31,9 @@ class MarketDataClient:
         provider = self.config.market_data.provider
         if provider == "yahoo":
             return fetch_yahoo_history(symbol, period)
-        if provider in {"akshare", "eodhd", "twelve_data"}:
+        if provider == "tushare":
+            return fetch_tushare_history(symbol, period, self.config.market_data.api_key)
+        if provider in PLANNED_HISTORY_PROVIDERS:
             return MarketDataResult(
                 symbol=symbol,
                 provider=provider,

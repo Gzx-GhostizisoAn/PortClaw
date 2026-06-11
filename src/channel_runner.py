@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 from typing import Iterable
 
@@ -8,6 +9,9 @@ from .channels.base import ChannelMessage, ChannelReply
 from .channels.jsonl import JsonlChannelAdapter
 from .channels.telegram import TelegramChannelAdapter
 from .config import AgentConfig, ChannelConfig, load_config
+
+
+SUPPORTED_GATEWAY_TYPES = {"jsonl", "telegram"}
 
 
 def build_adapter(config: ChannelConfig):
@@ -25,6 +29,12 @@ def iter_enabled_adapters(config: AgentConfig, channel_id: str | None = None):
         if channel.channel_type == "cli":
             continue
         if channel_id and channel.channel_id != channel_id:
+            continue
+        if channel.channel_type not in SUPPORTED_GATEWAY_TYPES:
+            print(
+                f"Skipping channel {channel.channel_id}: {channel.channel_type} adapter is not implemented yet.",
+                file=sys.stderr,
+            )
             continue
         yield build_adapter(channel)
 

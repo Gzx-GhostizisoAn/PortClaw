@@ -11,6 +11,7 @@ from .pipeline import DailyPipeline
 from .reporting import ReportGenerator
 from .ledger import load_portfolio_snapshot
 from .portfolio_input import default_portfolio_path
+from .schemas import DataSourceStatus
 
 
 @dataclass
@@ -63,10 +64,18 @@ class LocalFinanceAgent:
     def explain_portfolio_input(self, portfolio_path: Path | None = None) -> str:
         portfolio_path = portfolio_path or default_portfolio_path()
         snapshot, asset_metrics = load_portfolio_snapshot(self.config, portfolio_path)
+        source_status = [
+            item
+            for item in build_data_source_status(self.config, snapshot, asset_metrics, self.news_layer.fetcher.last_status)
+            if item.component == "market_data"
+        ]
         held_symbols = {position.asset.symbol for position in snapshot.positions}
         watchlist_symbols = [item.symbol for item in asset_metrics if item.symbol not in held_symbols]
 
         lines = [
+            "Data source status",
+            *format_data_source_status(source_status),
+            "",
             "Portfolio input file",
             f"- path: {portfolio_path}",
             f"- user_id: {snapshot.user_id}",
@@ -74,6 +83,7 @@ class LocalFinanceAgent:
             f"- cash: {snapshot.cash:.2f}",
             f"- total_market_value: {snapshot.total_market_value:.2f}",
             f"- market_data_provider: {snapshot.metadata.get('market_data_provider', self.config.market_data.provider)}",
+            f"- daily_return: {_format_pct(calculate_daily_return(snapshot))}",
             "",
             "Positions are the assets the user currently holds:",
         ]
@@ -81,7 +91,9 @@ class LocalFinanceAgent:
             market_note = position.asset.metadata.get("market_data_error") or "ok"
             lines.append(
                 f"- {position.asset.symbol}: quantity={position.quantity}, "
-                f"average_cost={position.average_cost}, market_price={position.market_price}, "
+                f"average_cost={position.average_cost}, previous_close={_format_number(position.previous_close)}, "
+                f"market_price={position.market_price}, daily_pnl={_format_number(position.daily_pnl)}, "
+                f"daily_pnl_pct={_format_pct(position.daily_pnl_pct)}, "
                 f"weight={(position.weight or 0):.2%}, market_data={market_note}"
             )
         lines.extend(
@@ -103,7 +115,7 @@ class LocalFinanceAgent:
     def _build_daily_brief(self, portfolio_path: Path | None = None):
         snapshot, asset_metrics = load_portfolio_snapshot(self.config, portfolio_path)
         news_items, news_events, news_impacts, news_summary = self.news_layer.build(snapshot)
-        return self.pipeline.run(
+        brief = self.pipeline.run(
             snapshot=snapshot,
             asset_metrics=asset_metrics,
             news_items=news_items,
@@ -111,18 +123,26 @@ class LocalFinanceAgent:
             news_impacts=news_impacts,
             news_summary=news_summary,
         )
+        brief.data_source_status = build_data_source_status(
+            config=self.config,
+            snapshot=snapshot,
+            asset_metrics=asset_metrics,
+            news_status=self.news_layer.fetcher.last_status,
+        )
+        return brief
 
     def handle_message(self, message: str) -> AgentResponse:
         normalized = message.strip().lower()
         if not normalized:
             return AgentResponse(text="Please enter a message.")
-        if normalized in {"help", "?", "h"}:
+        command = normalized[1:] if normalized.startswith("/") else normalized
+        if command in {"help", "?", "h"}:
             return AgentResponse(text=self.help_text())
-        if normalized in {"status", "config", "settings"} or "status" in normalized:
+        if command in {"status", "config", "settings"}:
             return AgentResponse(text=self.status())
-        if normalized in {"daily", "brief", "report", "run"}:
+        if command in {"daily", "brief", "report", "run"}:
             return self.run_daily()
-        if normalized in {"portfolio", "holdings", "positions"}:
+        if command in {"portfolio", "holdings", "positions"}:
             return AgentResponse(text=self.explain_portfolio_input())
         return self.answer(message)
 
@@ -130,8 +150,169 @@ class LocalFinanceAgent:
         return (
             "Local finance agent chat\n"
             "- Ask freely, for example: Why is my portfolio risky today?\n"
-            "- daily: generate the full daily brief\n"
-            "- portfolio: explain the local holdings input file\n"
-            "- status: show runtime and API-key readiness\n"
-            "- help: show this message"
+            "- /daily or daily: generate the full daily brief\n"
+            "- /portfolio or portfolio: explain the local holdings input file\n"
+            "- /status or status: show runtime and API-key readiness\n"
+            "- /help or help: show this message\n"
+            "- Any other message is treated as a model-backed question when an LLM provider is configured."
         )
+
+
+def calculate_daily_return(snapshot) -> float | None:
+    daily_pnl = 0.0
+    previous_total = snapshot.cash
+    has_daily_data = False
+    for position in snapshot.positions:
+        if position.daily_pnl is None or position.previous_close is None:
+            continue
+        daily_pnl += position.daily_pnl
+        previous_total += position.quantity * position.previous_close
+        has_daily_data = True
+    if not has_daily_data or previous_total <= 0:
+        return None
+    return daily_pnl / previous_total
+
+
+def _format_number(value: float | None) -> str:
+    return "unknown" if value is None else f"{value:.2f}"
+
+
+def _format_pct(value: float | None) -> str:
+    return "unknown" if value is None else f"{value:.2%}"
+
+
+def build_data_source_status(
+    config: AgentConfig,
+    snapshot,
+    asset_metrics,
+    news_status: dict[str, object] | None = None,
+) -> list[DataSourceStatus]:
+    statuses = [
+        _market_data_status(config, snapshot, asset_metrics),
+        _news_data_status(config, news_status or {}),
+    ]
+    snapshot.metadata["data_source_status"] = [item.model_dump(mode="json") for item in statuses]
+    return statuses
+
+
+def _market_data_status(config: AgentConfig, snapshot, asset_metrics) -> DataSourceStatus:
+    provider = config.market_data.provider
+    provider_symbols: list[str] = []
+    fallback_symbols: list[str] = []
+    errors: list[str] = []
+    fallback_fields = set()
+    used_fields = {"positions.quantity", "positions.average_cost", "cash"}
+
+    for position in snapshot.positions:
+        metadata = position.asset.metadata
+        field_sources = metadata.get("field_sources", {})
+        error = metadata.get("market_data_error")
+        if error:
+            fallback_symbols.append(position.asset.symbol)
+            errors.append(f"{position.asset.symbol}: {error}")
+        else:
+            provider_symbols.append(position.asset.symbol)
+        for field_name, source in field_sources.items():
+            if source == "provider_history":
+                used_fields.add(f"positions.{field_name}")
+            elif source == "portfolio_file_fallback":
+                fallback_fields.add(f"positions.{field_name}")
+
+    for metric in asset_metrics:
+        source = metric.metadata.get("metric_source")
+        if source == "market_history":
+            used_fields.add("asset_metrics")
+        elif source:
+            fallback_fields.add("asset_metrics")
+            error = metric.metadata.get("market_data_error")
+            if error and f"{metric.symbol}: {error}" not in errors:
+                errors.append(f"{metric.symbol}: {error}")
+
+    if provider_symbols and fallback_symbols:
+        status = "partial"
+        note = "Some symbols used provider history; others fell back to local portfolio values."
+    elif provider_symbols:
+        status = "ok"
+        note = "Market price, previous close, daily P&L, and history-based metrics used provider history where available."
+    else:
+        status = "fallback"
+        fallback_fields.update({"positions.market_price", "portfolio.total_market_value", "portfolio.total_return", "asset_metrics"})
+        note = "No requested symbols returned usable provider history; local portfolio values were used."
+
+    if not snapshot.positions:
+        status = "empty"
+        note = "No positions were available for market-data enrichment."
+
+    return DataSourceStatus(
+        component="market_data",
+        provider=provider,
+        status=status,
+        used_fields=sorted(used_fields),
+        fallback_fields=sorted(fallback_fields),
+        affected_symbols=sorted(set(fallback_symbols)),
+        errors=_unique(errors),
+        note=note,
+    )
+
+
+def _news_data_status(config: AgentConfig, news_status: dict[str, object]) -> DataSourceStatus:
+    provider = str(news_status.get("provider") or config.market_data.provider)
+    status = str(news_status.get("status") or "unknown")
+    errors = [str(item) for item in news_status.get("errors", [])]
+    item_count = int(news_status.get("item_count") or 0)
+    if status == "ok":
+        note = f"{item_count} news item(s) collected from provider and used for event impact analysis."
+        used_fields = ["news_items", "news_events", "news_impacts"]
+        fallback_fields: list[str] = []
+    elif status == "empty":
+        note = "Provider returned no news items; news risk was not available for this run."
+        used_fields = []
+        fallback_fields = ["news_items", "news_events", "news_impacts"]
+    elif status == "not_implemented":
+        note = "Configured provider does not yet have a news adapter; news risk is unavailable."
+        used_fields = []
+        fallback_fields = ["news_items", "news_events", "news_impacts"]
+    elif status == "partial":
+        note = f"{item_count} news item(s) collected, but one or more symbol fetches failed."
+        used_fields = ["news_items", "news_events", "news_impacts"]
+        fallback_fields = []
+    else:
+        note = "News provider failed or is unavailable; news risk was not available for this run."
+        used_fields = []
+        fallback_fields = ["news_items", "news_events", "news_impacts"]
+
+    return DataSourceStatus(
+        component="news",
+        provider=provider,
+        status=status,
+        used_fields=used_fields,
+        fallback_fields=fallback_fields,
+        errors=_unique(errors),
+        note=note,
+    )
+
+
+def _unique(items: list[str]) -> list[str]:
+    output: list[str] = []
+    for item in items:
+        if item and item not in output:
+            output.append(item)
+    return output
+
+
+def format_data_source_status(statuses: list[DataSourceStatus]) -> list[str]:
+    lines: list[str] = []
+    for item in statuses:
+        symbol_text = f"; affected_symbols={', '.join(item.affected_symbols)}" if item.affected_symbols else ""
+        lines.append(f"- {item.component}: provider={item.provider}, status={item.status}{symbol_text}")
+        if item.used_fields:
+            lines.append(f"  used_fields: {', '.join(item.used_fields)}")
+        if item.fallback_fields:
+            lines.append(f"  fallback_fields: {', '.join(item.fallback_fields)}")
+        if item.note:
+            lines.append(f"  note: {item.note}")
+        for error in item.errors[:5]:
+            lines.append(f"  error: {error}")
+        if len(item.errors) > 5:
+            lines.append(f"  error: ... {len(item.errors) - 5} more")
+    return lines
