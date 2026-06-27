@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Iterable, List
+from datetime import datetime, timedelta
+import re
+from typing import Any, Iterable, List
+from html import unescape
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from uuid import uuid4
+
+import requests
+from bs4 import BeautifulSoup
 
 from ..config import AgentConfig
 from ..schemas import (
@@ -13,6 +19,15 @@ from ..schemas import (
     NewsItem,
     PortfolioSnapshot,
 )
+
+
+CRAWLER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+    ),
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
+}
 
 
 EVENT_RULES = [
@@ -153,49 +168,543 @@ class NewsFetcher:
         }
 
     def fetch(self, symbols: Iterable[str], limit_per_symbol: int = 5) -> List[NewsItem]:
+        positions = [{"symbol": str(symbol).strip().upper()} for symbol in symbols if str(symbol).strip()]
+        return self.fetch_portfolio_news(positions, limit=max(1, limit_per_symbol) * max(1, len(positions)))
+
+    def fetch_portfolio_news(self, positions: Iterable[dict[str, Any]], limit: int = 12, lookback: str | None = None) -> List[NewsItem]:
+        positions = list(positions)
         provider = self.config.market_data.provider
+        news_provider = getattr(getattr(self.config, "news", None), "provider", "auto") or "auto"
+        lookback = self._normalize_lookback(lookback or getattr(getattr(self.config, "news", None), "lookback", "7d"))
         self.last_status = {
             "component": "news",
             "provider": provider,
+            "news_provider": news_provider,
+            "lookback": lookback,
             "status": "not_requested",
             "errors": [],
+            "adapter": None,
+            "fallback_used": False,
         }
-        if provider == "yahoo":
-            items = self._fetch_yfinance_news(symbols, limit_per_symbol)
+        adapters = {
+            "yahoo": lambda items, count: self._fetch_yfinance_portfolio_news(items, count, lookback),
+            "tushare": lambda items, count: self._fetch_tushare_portfolio_news(items, count, lookback),
+        }
+        errors: list[str] = []
+
+        if news_provider == "crawler":
+            return self._fetch_web_crawler_portfolio_news(positions, limit, lookback)
+
+        primary = adapters.get(provider)
+        if primary:
+            items = primary(positions, limit)
             if items:
-                self.last_status.update({"status": "ok", "item_count": len(items)})
-            elif not self.last_status.get("errors"):
-                self.last_status.update({"status": "empty", "item_count": 0})
-            return items
-        if provider in {
-            "sec",
-            "akshare",
-            "efinance",
-            "ccxt",
-            "fred",
-            "fmp",
-            "tushare",
-            "alpha_vantage",
-            "rqdata",
-            "eodhd",
-            "twelve_data",
-        }:
+                self.last_status.update({"status": "ok", "adapter": provider, "fallback_used": False, "item_count": len(items)})
+                return items
+            errors.extend(str(item) for item in self.last_status.get("errors", []))
+        else:
+            errors.append(f"{provider} does not have a dedicated news adapter yet")
+
+        if news_provider == "provider":
             self.last_status.update(
                 {
-                    "status": "not_implemented",
-                    "errors": [f"{provider} news adapter is not implemented yet"],
+                    "status": "empty" if not errors else "error",
+                    "adapter": None,
+                    "fallback_used": False,
+                    "errors": errors[:8],
                     "item_count": 0,
                 }
             )
             return []
+
+        for adapter_name, adapter in adapters.items():
+            if adapter_name == provider:
+                continue
+            if adapter_name == "tushare":
+                continue
+            items = adapter(positions, limit)
+            if items:
+                self.last_status.update(
+                    {
+                        "status": "fallback_ok",
+                        "provider": provider,
+                        "adapter": adapter_name,
+                        "fallback_used": True,
+                        "errors": errors[:8],
+                        "item_count": len(items),
+                    }
+                )
+                return items
+            errors.extend(str(item) for item in self.last_status.get("errors", []))
+
+        crawler_items = self._fetch_web_crawler_portfolio_news(positions, limit, lookback, fallback_errors=errors)
+        if crawler_items:
+            return crawler_items
+
         self.last_status.update(
             {
-                "status": "not_available",
-                "errors": [f"{provider} does not provide a configured news adapter"],
+                "status": "empty" if not errors else "error",
+                "provider": provider,
+                "adapter": None,
+                "fallback_used": False,
+                "errors": errors[:8],
                 "item_count": 0,
             }
         )
         return []
+
+    def _normalize_lookback(self, value: str | None) -> str:
+        if value in {"today", "7d", "1m", "6m"}:
+            return str(value)
+        return "7d"
+
+    def _lookback_days(self, lookback: str) -> int:
+        return {"today": 1, "7d": 7, "1m": 30, "6m": 183}.get(lookback, 7)
+
+    def _lookback_start(self, lookback: str) -> datetime:
+        return datetime.utcnow() - timedelta(days=self._lookback_days(lookback))
+
+    def _filter_by_lookback(self, items: list[NewsItem], lookback: str) -> list[NewsItem]:
+        start = self._lookback_start(lookback)
+        return [item for item in items if item.timestamp >= start]
+
+    def _lookback_query_hint(self, lookback: str, source: str) -> str:
+        if source == "baidu":
+            return {"today": " 今日", "7d": " 近7天", "1m": " 近一个月", "6m": " 近半年"}.get(lookback, "")
+        return {"today": " today", "7d": " past week", "1m": " past month", "6m": " past six months"}.get(lookback, "")
+
+    def _fetch_tushare_portfolio_news(self, positions: Iterable[dict[str, Any]], limit: int, lookback: str) -> List[NewsItem]:
+        token = self.config.market_data.api_key
+        if not token:
+            self.last_status.update({"status": "error", "errors": ["Tushare token is required"], "item_count": 0})
+            return []
+        try:
+            import tushare as ts
+        except ImportError:
+            self.last_status.update({"status": "error", "errors": ["tushare is not installed"], "item_count": 0})
+            return []
+
+        portfolio_terms = self._portfolio_terms(positions)
+        if not portfolio_terms:
+            self.last_status.update({"status": "empty", "errors": ["portfolio has no symbols"], "item_count": 0})
+            return []
+
+        start_date = self._lookback_start(lookback).date().strftime("%Y%m%d")
+        end_date = datetime.utcnow().date().strftime("%Y%m%d")
+        output: list[NewsItem] = []
+        errors: list[str] = []
+        seen: set[tuple[str, str | None]] = set()
+        try:
+            pro = ts.pro_api(token)
+        except Exception as exc:
+            self.last_status.update({"status": "error", "errors": [str(exc)], "item_count": 0})
+            return []
+
+        global_frames = self._tushare_global_news_frames(pro, start_date, end_date, errors)
+        for symbol, terms in portfolio_terms.items():
+            frames = self._tushare_announcement_frames(pro, symbol, start_date, end_date, errors) + global_frames
+            for frame in frames:
+                for raw in frame:
+                    item = self._normalize_tushare_news_item(raw, symbol)
+                    text = f"{item.title} {item.content}".lower()
+                    matched_symbols = [
+                        item_symbol
+                        for item_symbol, item_terms in portfolio_terms.items()
+                        if any(term and term.lower() in text for term in item_terms)
+                    ]
+                    if symbol not in matched_symbols and not any(term and term.lower() in text for term in terms):
+                        continue
+                    item.symbols = sorted(set(matched_symbols or [symbol]))
+                    key = (item.title, item.url)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    output.append(item)
+
+        output = sorted(output, key=lambda item: item.timestamp, reverse=True)[:limit]
+        if output:
+            self.last_status.update({"status": "ok" if not errors else "partial", "errors": errors[:8], "item_count": len(output)})
+        else:
+            self.last_status.update({"status": "empty" if not errors else "error", "errors": errors[:8], "item_count": 0})
+        return output
+
+    def _portfolio_terms(self, positions: Iterable[dict[str, Any]]) -> dict[str, set[str]]:
+        output: dict[str, set[str]] = {}
+        for item in positions:
+            symbol = str(item.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            code = symbol.split(".", 1)[0]
+            terms = {symbol, code}
+            for key in ("name", "sector"):
+                value = str(item.get(key) or "").strip()
+                if value:
+                    terms.add(value)
+            output[symbol] = terms
+        return output
+
+    def _tushare_announcement_frames(self, pro: Any, symbol: str, start_date: str, end_date: str, errors: list[str]) -> list[list[dict[str, Any]]]:
+        frames: list[list[dict[str, Any]]] = []
+        for method_name, kwargs in (("anns", {"ts_code": symbol, "start_date": start_date, "end_date": end_date}),):
+            frame = self._query_tushare_frame(pro, method_name, kwargs, errors)
+            if frame is not None and not getattr(frame, "empty", True):
+                frames.append(frame.head(80).to_dict("records"))
+        return frames
+
+    def _tushare_global_news_frames(self, pro: Any, start_date: str, end_date: str, errors: list[str]) -> list[list[dict[str, Any]]]:
+        frames: list[list[dict[str, Any]]] = []
+        for method_name, kwargs in (
+            ("news", {"src": "sina", "start_date": start_date, "end_date": end_date}),
+            ("major_news", {"src": "sina", "start_date": start_date, "end_date": end_date}),
+        ):
+            frame = self._query_tushare_frame(pro, method_name, kwargs, errors)
+            if frame is not None and not getattr(frame, "empty", True):
+                frames.append(frame.head(160).to_dict("records"))
+        return frames
+
+    def _query_tushare_frame(self, pro: Any, method_name: str, kwargs: dict[str, Any], errors: list[str]) -> Any | None:
+        try:
+            method = getattr(pro, method_name, None)
+            if method:
+                frame = method(**kwargs)
+            elif hasattr(pro, "query"):
+                frame = pro.query(method_name, **kwargs)
+            else:
+                return None
+        except Exception as exc:
+            errors.append(f"{method_name}: {exc}")
+            return None
+        return frame
+
+    def _normalize_tushare_news_item(self, raw: dict[str, Any], symbol: str) -> NewsItem:
+        title = raw.get("title") or raw.get("ann_title") or raw.get("headline") or raw.get("name") or ""
+        content = raw.get("content") or raw.get("summary") or raw.get("ann_desc") or raw.get("abstract") or ""
+        timestamp_raw = raw.get("datetime") or raw.get("pub_time") or raw.get("ann_date") or raw.get("trade_date") or raw.get("date")
+        timestamp = self._parse_tushare_timestamp(timestamp_raw)
+        url = raw.get("url") or raw.get("ann_url")
+        source = raw.get("src") or raw.get("source") or "tushare"
+        return NewsItem(
+            title=str(title),
+            content=str(content),
+            source=str(source),
+            timestamp=timestamp,
+            symbols=[symbol],
+            url=str(url) if url else None,
+            metadata={"provider": "tushare"},
+        )
+
+    def _parse_tushare_timestamp(self, value: Any) -> datetime:
+        if value in {None, ""}:
+            return datetime.utcnow()
+        text = str(value).strip()
+        for fmt in ("%Y%m%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y%m%d", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            return datetime.utcnow()
+
+    def _fetch_web_crawler_portfolio_news(
+        self,
+        positions: Iterable[dict[str, Any]],
+        limit: int,
+        lookback: str,
+        fallback_errors: list[str] | None = None,
+    ) -> List[NewsItem]:
+        output: list[NewsItem] = []
+        errors = list(fallback_errors or [])
+        seen: set[tuple[str, str | None]] = set()
+        for position in positions:
+            source = "baidu" if self._is_a_share_position(position) else "yahoo"
+            items: list[NewsItem] = []
+            queries = [
+                self._crawler_query(position, source, lookback),
+                self._crawler_query(position, source, lookback, include_hint=False),
+            ]
+            for query in dict.fromkeys(queries):
+                try:
+                    items = self._search_baidu_news(query, position, max(1, limit // 2)) if source == "baidu" else self._search_yahoo_news(query, position, max(1, limit // 2))
+                except Exception as exc:
+                    errors.append(f"{source} crawler {query}: {exc}")
+                    continue
+                if items:
+                    break
+            if not items and source == "baidu":
+                errors.append(f"baidu crawler {queries[0]}: no parseable result, trying yahoo fallback")
+                yahoo_queries = [
+                    self._crawler_query(position, "yahoo", lookback),
+                    self._crawler_query(position, "yahoo", lookback, include_hint=False),
+                ]
+                for yahoo_query in dict.fromkeys(yahoo_queries):
+                    try:
+                        items = self._search_yahoo_news(yahoo_query, position, max(1, limit // 2))
+                    except Exception as exc:
+                        errors.append(f"yahoo crawler fallback {yahoo_query}: {exc}")
+                        continue
+                    if items:
+                        break
+            for item in items:
+                key = (item.title, item.url)
+                if key in seen:
+                    continue
+                seen.add(key)
+                output.append(item)
+            if len(output) >= limit:
+                break
+        output = sorted(output, key=lambda item: item.timestamp, reverse=True)[:limit]
+        self.last_status.update(
+            {
+                "status": "crawler_ok" if output else "empty" if not errors else "error",
+                "adapter": "crawler",
+                "fallback_used": bool(fallback_errors),
+                "errors": errors[:8],
+                "item_count": len(output),
+            }
+        )
+        return output
+
+    def _is_a_share_position(self, position: dict[str, Any]) -> bool:
+        symbol = str(position.get("symbol") or "").strip().upper()
+        if symbol.endswith((".SH", ".SZ", ".BJ")):
+            return True
+        return symbol.isdigit() and len(symbol) == 6
+
+    def _crawler_query(self, position: dict[str, Any], source: str, lookback: str, include_hint: bool = True) -> str:
+        name = self._clean_text(str(position.get("name") or ""))
+        symbol = str(position.get("symbol") or "").strip().upper()
+        identity = " ".join(part for part in [symbol, name] if part).strip() or symbol or name
+        hint = self._lookback_query_hint(lookback, source) if include_hint else ""
+        if source == "baidu":
+            return f"{identity} 新闻{hint}"
+        return f"{identity} stock news{hint}"
+
+    def _search_yahoo_news(self, query: str, position: dict[str, Any], limit: int) -> list[NewsItem]:
+        url = f"https://news.search.yahoo.com/search?p={quote_plus(query)}"
+        soup = BeautifulSoup(self._fetch_crawler_html(url), "html.parser")
+        nodes = []
+        for selector in ("li div.NewsArticle", "div.NewsArticle", "ol.searchCenterMiddle li", "div#web ol li"):
+            nodes = soup.select(selector)
+            if nodes:
+                break
+        lookback = self._lookback_from_query(query)
+        return self._parse_search_nodes("yahoo_crawler", query, position, nodes, limit, lookback)
+
+    def _search_baidu_news(self, query: str, position: dict[str, Any], limit: int) -> list[NewsItem]:
+        urls = [
+            f"https://www.baidu.com/s?tn=news&rtt=1&bsst=1&cl=2&wd={quote_plus(query)}",
+            f"https://m.baidu.com/s?word={quote_plus(query)}&tn=bdwns",
+        ]
+        for url in urls:
+            soup = BeautifulSoup(self._fetch_crawler_html(url), "html.parser")
+            nodes = soup.select("div.result, div.result-op, div.c-container, div.c-result")
+            lookback = self._lookback_from_query(query)
+            items = self._parse_search_nodes("baidu_crawler", query, position, nodes, limit, lookback)
+            if items:
+                return items
+        return []
+
+    def _parse_search_nodes(self, source: str, query: str, position: dict[str, Any], nodes: list[Any], limit: int, lookback: str) -> list[NewsItem]:
+        output: list[NewsItem] = []
+        symbol = str(position.get("symbol") or "").strip().upper()
+        start = self._lookback_start(lookback)
+        now = datetime.utcnow()
+        for node in nodes:
+            link = self._best_news_link(node)
+            if not link:
+                continue
+            href = self._direct_url(link.get("href") or "")
+            title = self._clean_text(link.get_text(" "))
+            if not title or title.startswith("http"):
+                title = self._title_from_node_text(node)
+            if not self._looks_like_news(title, href):
+                continue
+            snippet_node = node.select_one(".s-desc, .fc-falcon, .c-font-normal, .c-span-last, .content-right_8Zs40, .c-abstract, p")
+            snippet = self._clean_text(snippet_node.get_text(" ") if snippet_node else node.get_text(" "))
+            publisher_node = node.select_one(".s-source, .mr-5, cite, .c-color-gray, .c-color-gray2, .news-source_Xj4Dv")
+            publisher = self._clean_text(publisher_node.get_text(" ") if publisher_node else source)
+            timestamp = self._parse_crawler_timestamp(" ".join([title, snippet, publisher, self._clean_text(node.get_text(" "))]), now)
+            if timestamp is None:
+                continue
+            if timestamp < start or timestamp > now + timedelta(hours=6):
+                continue
+            output.append(
+                NewsItem(
+                    title=title,
+                    content=snippet,
+                    source=publisher or source,
+                    timestamp=timestamp,
+                    symbols=[symbol] if symbol else [],
+                    url=href,
+                    metadata={"provider": source, "query": query, "timestamp_source": "crawler_text"},
+                )
+            )
+            if len(output) >= limit:
+                break
+        return output
+
+    def _lookback_from_query(self, query: str) -> str:
+        text = query.lower()
+        if "今日" in query or "today" in text:
+            return "today"
+        if "近7天" in query or "past week" in text:
+            return "7d"
+        if "近一个月" in query or "past month" in text:
+            return "1m"
+        if "近半年" in query or "past six months" in text:
+            return "6m"
+        return getattr(getattr(self.config, "news", None), "lookback", "7d") or "7d"
+
+    def _parse_crawler_timestamp(self, text: str, now: datetime) -> datetime | None:
+        cleaned = self._clean_text(text)
+        for pattern, fmt in (
+            (r"(20\d{2})年(\d{1,2})月(\d{1,2})日", None),
+            (r"(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})", None),
+        ):
+            match = re.search(pattern, cleaned)
+            if match:
+                year, month, day = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+                return datetime(year, month, day)
+
+        match = re.search(r"(?<!\d)(\d{1,2})月(\d{1,2})日", cleaned)
+        if match:
+            month, day = int(match.group(1)), int(match.group(2))
+            candidate = datetime(now.year, month, day)
+            if candidate > now + timedelta(days=1):
+                candidate = datetime(now.year - 1, month, day)
+            return candidate
+
+        match = re.search(r"(\d{1,3})\s*(?:天|日)\s*前", cleaned)
+        if match:
+            return now - timedelta(days=int(match.group(1)))
+        match = re.search(r"(\d{1,3})\s*(?:小时|小時)\s*前", cleaned)
+        if match:
+            return now - timedelta(hours=int(match.group(1)))
+        if "前天" in cleaned:
+            return now - timedelta(days=2)
+        if "昨天" in cleaned or "昨日" in cleaned:
+            return now - timedelta(days=1)
+        if "今天" in cleaned or "今日" in cleaned:
+            return now
+
+        match = re.search(r"(\d{1,3})\s+days?\s+ago", cleaned, flags=re.IGNORECASE)
+        if match:
+            return now - timedelta(days=int(match.group(1)))
+        match = re.search(r"(\d{1,3})\s+hours?\s+ago", cleaned, flags=re.IGNORECASE)
+        if match:
+            return now - timedelta(hours=int(match.group(1)))
+        if re.search(r"\byesterday\b", cleaned, flags=re.IGNORECASE):
+            return now - timedelta(days=1)
+        if re.search(r"\btoday\b", cleaned, flags=re.IGNORECASE):
+            return now
+
+        month_names = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec"
+        match = re.search(rf"\b({month_names})\.?\s+(\d{{1,2}}),?\s+(20\d{{2}})\b", cleaned, flags=re.IGNORECASE)
+        if match:
+            month_lookup = {
+                "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+                "jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+            }
+            month = month_lookup[match.group(1).lower().rstrip(".")]
+            return datetime(int(match.group(3)), month, int(match.group(2)))
+        return None
+
+    def _best_news_link(self, node: Any) -> Any | None:
+        preferred = node.select_one("h4 a, h3 a")
+        if preferred and self._looks_like_news(self._clean_text(preferred.get_text(" ")), self._direct_url(preferred.get("href") or "")):
+            return preferred
+        for link in node.select("a"):
+            href = self._direct_url(link.get("href") or "")
+            if self._looks_like_news(self._clean_text(link.get_text(" ")), href) or self._external_news_url(href):
+                return link
+        return None
+
+    def _title_from_node_text(self, node: Any) -> str:
+        text = self._clean_text(node.get_text(" "))
+        text = re.sub(r"总结全网\\d+篇结果.*?(?=贵州|[A-Z][A-Za-z])", "", text)
+        text = re.sub(r"\\d{4}年\\d{1,2}月\\d{1,2}日", " ", text)
+        parts = re.split(r"\\s{2,}| - | _ | \\| |。", text)
+        for part in parts:
+            part = self._clean_text(part)
+            if 8 <= len(part) <= 80 and not part.startswith(("大家还在搜", "点击", "暂停", "收听")):
+                return part
+        return text[:80]
+
+    def _external_news_url(self, url: str) -> bool:
+        host = urlparse(url).netloc.lower()
+        return bool(host) and not any(host.endswith(blocked) for blocked in ("baidu.com", "yahoo.com"))
+
+    def _fetch_crawler_html(self, url: str) -> str:
+        response = requests.get(url, headers=CRAWLER_HEADERS, timeout=12)
+        response.raise_for_status()
+        return response.text
+
+    def _clean_text(self, value: str | None) -> str:
+        text = unescape(value or "")
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _direct_url(self, value: str) -> str:
+        if not value:
+            return ""
+        parsed = urlparse(value)
+        query = parse_qs(parsed.query)
+        for key in ("target", "url", "u"):
+            if key in query and query[key]:
+                return unquote(query[key][0])
+        match = re.search(r"/RU=([^/]+)/", value)
+        if match:
+            return unquote(match.group(1))
+        return value
+
+    def _looks_like_news(self, title: str, url: str) -> bool:
+        if len(self._clean_text(title)) < 6:
+            return False
+        blocked_hosts = {"top.baidu.com", "www.baidu.com", "m.baidu.com", "search.yahoo.com", "news.search.yahoo.com"}
+        return urlparse(url).netloc.lower() not in blocked_hosts
+
+    def _fetch_yfinance_portfolio_news(self, positions: Iterable[dict[str, Any]], limit: int, lookback: str) -> List[NewsItem]:
+        symbol_map = self._yfinance_symbol_map(positions)
+        if not symbol_map:
+            self.last_status.update({"status": "empty", "errors": ["portfolio has no symbols"], "item_count": 0})
+            return []
+        items = self._fetch_yfinance_news(symbol_map.keys(), max(1, limit // max(1, len(symbol_map))))
+        for item in items:
+            item.symbols = [symbol_map.get(symbol, symbol) for symbol in item.symbols]
+            item.metadata["adapter"] = "yfinance"
+        output = sorted(self._filter_by_lookback(items, lookback), key=lambda item: item.timestamp, reverse=True)[:limit]
+        if output and not self.last_status.get("errors"):
+            self.last_status.update({"status": "ok", "errors": [], "item_count": len(output)})
+        elif not output and not self.last_status.get("errors"):
+            self.last_status.update({"status": "empty", "errors": ["yfinance returned no matching news"], "item_count": 0})
+        return output
+
+    def _yfinance_symbol_map(self, positions: Iterable[dict[str, Any]]) -> dict[str, str]:
+        output: dict[str, str] = {}
+        for item in positions:
+            original = str(item.get("symbol") or "").strip().upper()
+            if not original:
+                continue
+            for candidate in self._yfinance_symbol_candidates(original):
+                output[candidate] = original
+        return output
+
+    def _yfinance_symbol_candidates(self, symbol: str) -> list[str]:
+        if symbol.endswith(".SH"):
+            return [symbol.replace(".SH", ".SS")]
+        if symbol.endswith(".SZ"):
+            return [symbol]
+        if symbol.endswith(".BJ"):
+            return [symbol]
+        if "." in symbol:
+            return [symbol]
+        if symbol.isdigit() and len(symbol) == 6:
+            if symbol.startswith(("5", "6", "9")):
+                return [f"{symbol}.SS"]
+            if symbol.startswith(("0", "1", "2", "3")):
+                return [f"{symbol}.SZ"]
+        return [symbol]
 
     def _fetch_yfinance_news(self, symbols: Iterable[str], limit_per_symbol: int) -> List[NewsItem]:
         try:

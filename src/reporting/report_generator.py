@@ -31,6 +31,7 @@ class ReportGenerator:
                 "total_return": brief.portfolio_metrics.total_return,
                 "daily_return": brief.portfolio_metrics.daily_return,
                 "largest_position_weight": brief.portfolio_metrics.largest_position_weight,
+                "trade_ledger": brief.portfolio_snapshot.metadata.get("trade_ledger", {}),
                 "positions": [
                     {
                         "symbol": position.asset.symbol,
@@ -186,22 +187,26 @@ class ReportGenerator:
         signals = self._format_signals(brief.signals) or "暂无触发信号。"
         candidates = self._format_candidates(brief.strategy_candidates) or "暂无策略候选。"
         news = self._format_news_impacts(brief.news_impacts) or "暂无组合相关的新闻影响。"
+        trade_ledger = brief.portfolio_snapshot.metadata.get("trade_ledger", {})
+        trade_text = self._format_trade_ledger(trade_ledger)
 
         return (
             "本地每日组合分析\n\n"
             "1. 组合概览\n"
             f"总市值：{brief.portfolio_snapshot.total_market_value:.2f} {brief.portfolio_snapshot.base_currency}\n"
             f"总收益率：{total_return_text}\n"
-            f"今日收益率：{daily_return_text}\n"
-            f"今日估算盈亏：{daily_pnl:.2f} {brief.portfolio_snapshot.base_currency}\n"
+            f"最近完成交易日收益率：{daily_return_text}\n"
+            f"最近完成交易日估算盈亏：{daily_pnl:.2f} {brief.portfolio_snapshot.base_currency}\n"
             f"最大单一持仓权重：{(brief.portfolio_metrics.largest_position_weight or 0):.2%}\n\n"
-            "2. 优先风险主题\n"
+            "2. 交易流水同步\n"
+            f"{trade_text}\n\n"
+            "3. 优先风险主题\n"
             f"{themes}\n\n"
-            "3. 触发信号\n"
+            "4. 触发信号\n"
             f"{signals}\n\n"
-            "4. 策略候选\n"
+            "5. 策略候选\n"
             f"{candidates}\n\n"
-            "5. 新闻影响层\n"
+            "6. 新闻影响层\n"
             f"{news}\n\n"
             f"风险提示：{brief.disclaimer}"
         )
@@ -231,7 +236,7 @@ class ReportGenerator:
             "2. 组合状态\n"
             f"组合市值：{brief.portfolio_snapshot.total_market_value:.2f} {brief.portfolio_snapshot.base_currency}\n"
             f"总收益率：{total_return_text}\n"
-            f"今日收益率：{daily_return_text}\n"
+            f"最近完成交易日收益率：{daily_return_text}\n"
             f"最大单一持仓权重：{(brief.portfolio_metrics.largest_position_weight or 0):.2%}\n\n"
             "3. 优先风险主题\n"
             f"{theme_text}\n\n"
@@ -264,6 +269,20 @@ class ReportGenerator:
             f"基础影响 {item.base_impact:.1f}/100，放大系数 {item.amplification_factor:.2f}x，"
             f"组合暴露 {item.portfolio_exposure:.1%}，相关标的 {', '.join(item.affected_symbols) or 'none'}。"
             for index, item in enumerate(sorted_impacts, start=1)
+        )
+
+    def _format_trade_ledger(self, trade_ledger: dict[str, Any]) -> str:
+        if not trade_ledger:
+            return "暂无交易流水同步记录，当前分析基于持仓快照。"
+        last_synced = trade_ledger.get("last_synced_at", "unknown")
+        last_count = trade_ledger.get("last_import_count", 0)
+        realized_pnl = float(trade_ledger.get("last_realized_pnl", 0.0))
+        cumulative = float(trade_ledger.get("cumulative_realized_pnl", 0.0))
+        log_path = trade_ledger.get("trade_log", "unknown")
+        return (
+            f"最近同步时间：{last_synced}；最近导入交易：{last_count} 笔；"
+            f"最近实现盈亏：{realized_pnl:.2f}；累计实现盈亏：{cumulative:.2f}；"
+            f"行为日志：{log_path}"
         )
 
     def _with_source_notice(self, brief: DailyBrief, body: str) -> str:

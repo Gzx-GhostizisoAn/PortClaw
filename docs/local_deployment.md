@@ -1,8 +1,8 @@
 # Local Deployment
 
-PortClaw is a local agent runtime, not a web product. The first deployment target is a personal machine running Python.
+PortClaw is a local desktop agent. The normal user entrypoint on macOS is a Finder-launchable `PortClaw.app`; Python commands remain available for development and debugging.
 
-## 1. Install
+## 1. Install Dependencies
 
 ```bash
 cd PortClaw
@@ -11,7 +11,31 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 2. Create Local Config
+## 2. Build The macOS App
+
+```bash
+scripts/build_macos_app.sh
+open "$HOME/Applications/PortClaw.app"
+```
+
+The builder creates:
+
+- `~/Applications/PortClaw.app`: the double-clickable app bundle.
+- `~/Library/Application Support/PortClaw/app`: a clean copy of the runtime source.
+- `~/Library/Logs/PortClaw/app.log`: app startup logs.
+
+The generated app bundle and runtime copy exclude local config, private holdings, trade logs, audit runs, message logs, caches, and generated outputs.
+
+To build a standalone app that embeds Python and dependencies:
+
+```bash
+scripts/build_pyinstaller_app.sh
+open dist/PortClaw.app
+```
+
+The standalone app writes local runtime state to `~/Library/Application Support/PortClaw/runtime` and startup logs to `~/Library/Logs/PortClaw/pyinstaller-app.log`.
+
+## 3. Create Local Config
 
 ```bash
 python agent.py init
@@ -77,7 +101,7 @@ Provider credential notes:
 - `fred`, `fmp`, `tushare`, `alpha_vantage`, `rqdata`, `eodhd`, and `twelve_data` require keys, tokens, or account/license credentials.
 - The implemented Tushare adapter currently fetches China-market daily history for Tushare `ts_code` symbols such as `600519.SH`, `000001.SZ`, or plain six-digit A-share codes.
 
-## 3. Run CLI Agent
+## 4. Run CLI Agent
 
 ```bash
 python agent.py status
@@ -94,7 +118,7 @@ python agent.py portfolio-template
 python agent.py import-holdings --csv data/portfolio_template.csv
 ```
 
-## 4. Run Message Chat
+## 5. Run Message Chat
 
 The message channel is a local JSONL inbox/outbox. It is useful for testing a messaging-gateway style interface before integrating Telegram, Discord, email, or another channel.
 
@@ -110,7 +134,7 @@ Outputs are written to:
 messages/outbox.jsonl
 ```
 
-## 5. Configure Channels
+## 6. Configure Channels
 
 ```bash
 python agent.py channels
@@ -119,7 +143,7 @@ python agent.py configure-channel --channel-id telegram_personal --channel-type 
 
 PortClaw stores channel configuration locally and supports local JSONL plus Telegram Bot API polling. Other platforms can be added by implementing the adapter contract in `src/channels/base.py`.
 
-## 6. Audit Trail
+## 7. Audit Trail
 
 Every daily run stores:
 

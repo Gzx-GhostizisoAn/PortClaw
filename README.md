@@ -14,6 +14,7 @@ PortClaw is not a web product. It runs locally with private portfolio files, loc
 ## Core Capabilities
 
 - Local holdings input through an interactive wizard or CSV import.
+- Trade CSV import that updates holdings, cash, cost basis, realized P&L, and a local behavior log.
 - Market-data abstraction with Yahoo Finance/yfinance history enrichment.
 - Deterministic portfolio metrics, exposures, and stress scenarios.
 - Raw rule signals with structured evidence.
@@ -53,7 +54,27 @@ python agent.py daily
 
 `python agent.py init` creates local runtime files from safe templates. Do not commit generated private files such as `config/local_config.json`, `.env`, `audit_runs/`, or `messages/`.
 
-## Common Commands
+## Open The Desktop App
+
+Build and install the macOS app bundle:
+
+```bash
+scripts/build_macos_app.sh
+open "$HOME/Applications/PortClaw.app"
+```
+
+After this, PortClaw opens like a normal Mac app from Finder. The bundle launches a native desktop window and keeps the local Python runtime behind the app boundary.
+
+Build a standalone PyInstaller app bundle:
+
+```bash
+scripts/build_pyinstaller_app.sh
+open dist/PortClaw.app
+```
+
+The PyInstaller bundle includes the Python runtime and dependencies inside `dist/PortClaw.app`. Runtime config, holdings, trade logs, and templates are stored under `~/Library/Application Support/PortClaw/runtime`.
+
+## Developer Commands
 
 Start the interactive menu UI:
 
@@ -62,10 +83,35 @@ python agent.py menu
 python agent.py ui
 ```
 
+Start the local Web App UI during development:
+
+```bash
+python app.py
+```
+
+Then open `http://127.0.0.1:8765`. The app is a local wrapper around the existing PortClaw runtime, so commands such as status, daily brief generation, portfolio explanation, and free-form questions still use `agent.py` and the same private local config/portfolio files.
+
+Start the local desktop window UI during development:
+
+```bash
+python desktop_app.py
+```
+
+This uses pywebview to show the same local PortClaw interface inside a native desktop window.
+
+The UI includes a finance-first dashboard with portfolio value, period returns, risk level, allocation charts, holding weights, exposure analysis, agent alerts, and optimization suggestions. It also includes pages for daily risk reports, free-form questions, holdings editing, trade history, data-source status, and local model/data-source configuration.
+
+The Trade History page supports `Buy`, `Sell`, `Dividend`, `Deposit`, and `Withdraw` events. Trades update local holdings, cash, cost basis, realized P&L, and the private local behavior log.
+
+Desktop launcher sources live under `launchers/macos/`; the generated app bundle should not be committed.
+
 ```bash
 python agent.py holdings
 python agent.py portfolio-template
 python agent.py import-holdings --csv data/portfolio_template.csv
+python agent.py trade-template
+python agent.py import-trades --csv data/trade_template.csv
+python agent.py trade-log
 python agent.py portfolio
 python agent.py daily
 python agent.py ask "Why is my portfolio risky today?"
@@ -305,6 +351,33 @@ At the symbol prompt, these commands are available:
 
 The wizard saves to `data/portfolio.local.json` by default. This file is private local state and is ignored by git.
 
+## Trade Import And Live Holdings Sync
+
+For faster trading environments, do not keep `data/portfolio.local.json` as a static snapshot. Import trade rows whenever the user has new buys or sells:
+
+```bash
+python agent.py trade-template
+python agent.py import-trades --csv data/trade_template.csv
+python agent.py trade-log
+```
+
+The trade CSV supports these columns:
+
+| Field | Meaning |
+| --- | --- |
+| `traded_at` | Trade timestamp. Optional; current time is used if blank. |
+| `side` | `buy` / `sell`, or `买入` / `卖出`. |
+| `symbol` | Stock or ETF code. |
+| `name` | Company/security name. |
+| `sector` | Sector label used by exposure analysis. |
+| `quantity` | Shares/units bought or sold. |
+| `price` | Buy or sell execution price. |
+| `fees` | Commission, tax, or other transaction costs. |
+
+`import-trades` reads the current portfolio, applies each row, and writes the updated holdings back to `data/portfolio.local.json` by default. Buys increase quantity, update weighted average cost, reduce cash, and refresh local market price. Sells reduce quantity, increase cash, calculate realized P&L, and remove fully exited positions.
+
+Every applied row is also appended to `data/trades.local.jsonl` as a private behavior log. That log is intended for later user profiling, such as turnover, holding period, preferred sectors, risk appetite, and stop-loss/take-profit behavior. It is ignored by git.
+
 ## Message Channels
 
 Local JSONL gateway:
@@ -434,6 +507,7 @@ Local private files are ignored by git:
 - `.env`
 - `config/local_config.json`
 - `data/portfolio.local.json`
+- `data/trades.local.jsonl`
 - `audit_runs/`
 - `messages/`
 
@@ -445,5 +519,6 @@ See [SECURITY.md](SECURITY.md) and [open_source.md](docs/open_source.md) before 
 - Add EODHD, Twelve Data, and AKShare market-data adapters.
 - Expand risk theme taxonomy and event classification rules.
 - Add broker/export importers under `src/portfolio_input.py` or a future `src/importers/` package.
+- Add transaction-behavior analytics from `data/trades.local.jsonl`.
 - Add scheduled daily runs.
 - Add more external channel adapters under `src/channels/`.

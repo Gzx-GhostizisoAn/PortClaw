@@ -9,11 +9,23 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.cache/
 
 config/local_config.json
 data/portfolio.local.json
+data/trades.local.jsonl
 audit_runs/
 messages/
 outputs/
+build/
+dist/
+decks/
+videos/
+experiments/
+*.app/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log
 
 .DS_Store

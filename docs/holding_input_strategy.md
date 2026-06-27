@@ -4,6 +4,7 @@ The agent needs two different kinds of data:
 
 1. Private holdings: what the user owns, cost basis, quantity, cash.
 2. Public market data: prices, indicators, news, fundamentals.
+3. Private trade history: what the user bought or sold, at what price, and when.
 
 These should not be mixed.
 
@@ -23,6 +24,7 @@ So PortClaw starts with local-first input:
 
 - Interactive holdings wizard.
 - CSV import.
+- Trade CSV import that updates the local holdings snapshot.
 - Brokerage export normalization later.
 
 ## Input Methods
@@ -69,7 +71,65 @@ Import it:
 python agent.py import-holdings --csv data/portfolio_template.csv
 ```
 
-### 3. Future Brokerage Export Import
+### 3. Trade CSV Import For Active Trading
+
+For high-frequency or active trading workflows, holdings should be treated as a state derived from trades rather than a permanently static file.
+
+Create the template:
+
+```bash
+python agent.py trade-template
+```
+
+Fill:
+
+```text
+data/trade_template.csv
+```
+
+Import and sync:
+
+```bash
+python agent.py import-trades --csv data/trade_template.csv
+```
+
+The trade file accepts:
+
+- `traded_at`
+- `side`
+- `symbol`
+- `name`
+- `sector`
+- `quantity`
+- `price`
+- `fees`
+
+The import command reads the current `data/portfolio.local.json` if present, otherwise it falls back to `data/portfolio.example.json`. It applies buy/sell rows and writes updated holdings back to `data/portfolio.local.json` by default.
+
+Buy rows:
+
+- increase position quantity
+- update weighted average cost
+- reduce cash by trade value plus fees
+- refresh local fallback market price
+
+Sell rows:
+
+- reduce position quantity
+- keep average cost for the remaining position
+- increase cash by proceeds minus fees
+- calculate realized P&L
+- remove a position when quantity reaches zero
+
+Each applied trade is appended to:
+
+```text
+data/trades.local.jsonl
+```
+
+This JSONL file is private local behavior data. It is intended for later model features such as user profiling, turnover analysis, preferred sectors, realized P&L discipline, and risk appetite inference.
+
+### 4. Future Brokerage Export Import
 
 Many broker apps can export or copy positions as table text or CSV-like files. The next practical step is to add import profiles:
 
@@ -95,6 +155,7 @@ The boundary should stay clear:
 
 ```text
 Local holdings input -> private ledger
+Trade rows -> private behavior log and updated holdings
 Public market data -> price/news/fundamental enrichment
 ```
 

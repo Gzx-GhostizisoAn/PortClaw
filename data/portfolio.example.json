@@ -1,63 +1,6 @@
 {
-  "user_id": "LOCAL",
-  "base_currency": "CNY",
-  "cash": 100000.0,
-  "positions": [
-    {
-      "symbol": "600519.SH",
-      "name": "贵州茅台",
-      "sector": "消费",
-      "quantity": 50,
-      "average_cost": 1550.0,
-      "market_price": 1680.0
-    },
-    {
-      "symbol": "000858.SZ",
-      "name": "五粮液",
-      "sector": "消费",
-      "quantity": 200,
-      "average_cost": 125.0,
-      "market_price": 138.0
-    },
-    {
-      "symbol": "600036.SH",
-      "name": "招商银行",
-      "sector": "银行",
-      "quantity": 1000,
-      "average_cost": 38.5,
-      "market_price": 45.2
-    },
-    {
-      "symbol": "601318.SH",
-      "name": "中国平安",
-      "sector": "保险",
-      "quantity": 600,
-      "average_cost": 48.0,
-      "market_price": 55.6
-    },
-    {
-      "symbol": "300750.SZ",
-      "name": "宁德时代",
-      "sector": "新能源",
-      "quantity": 150,
-      "average_cost": 210.0,
-      "market_price": 265.0
-    },
-    {
-      "symbol": "002594.SZ",
-      "name": "比亚迪",
-      "sector": "新能源汽车",
-      "quantity": 100,
-      "average_cost": 240.0,
-      "market_price": 315.0
-    },
-    {
-      "symbol": "510300.SH",
-      "name": "沪深300ETF",
-      "sector": "指数ETF",
-      "quantity": 5000,
-      "average_cost": 3.85,
-      "market_price": 4.15
-    }
-  ]
+  "user_id": "example_user",
+  "base_currency": "USD",
+  "cash": 0.0,
+  "positions": []
 }

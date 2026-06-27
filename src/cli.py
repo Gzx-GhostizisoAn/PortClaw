@@ -8,6 +8,7 @@ from .commands.configuration import register_configuration_commands
 from .commands.holdings import register_holding_commands
 from .commands.menu import register_menu_command
 from .commands.runtime import register_runtime_commands
+from .commands.trades import register_trade_commands
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -17,6 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_configuration_commands(subparsers)
     register_runtime_commands(subparsers)
     register_holding_commands(subparsers)
+    register_trade_commands(subparsers)
     register_channel_commands(subparsers)
     register_menu_command(subparsers)
 

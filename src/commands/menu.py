@@ -10,6 +10,7 @@ from .channel_commands import cmd_channels, cmd_gateway, cmd_message
 from .configuration import cmd_config_show, cmd_data_sources, cmd_init, cmd_models, cmd_setup
 from .holdings import cmd_holdings_wizard, cmd_import_holdings, cmd_portfolio_template
 from .runtime import cmd_chat, cmd_daily, cmd_portfolio, cmd_status
+from .trades import cmd_import_trades, cmd_trade_log, cmd_trade_template
 
 
 RESET = "\033[0m"
@@ -217,7 +218,10 @@ def _holdings_menu() -> None:
                 ("1", "Interactive holdings wizard"),
                 ("2", "Write CSV template"),
                 ("3", "Import holdings from CSV"),
-                ("4", "Explain current holdings file"),
+                ("4", "Write trade CSV template"),
+                ("5", "Import trades and sync holdings"),
+                ("6", "Show recent trade behavior log"),
+                ("7", "Explain current holdings file"),
             ],
         )
         if choice == "1":
@@ -237,6 +241,20 @@ def _holdings_menu() -> None:
                     _ns(csv=csv_path, cash=cash, user_id="local_user", base_currency=currency, output=output),
                 )
         elif choice == "4":
+            output = _prompt_path("Trade CSV template output path")
+            _run_with_pause(cmd_trade_template, _ns(output=output))
+        elif choice == "5":
+            csv_path = input("Trade CSV path: ").strip()
+            if csv_path:
+                source = _prompt_path("Source portfolio JSON path")
+                output = _prompt_path("Updated holdings output path")
+                log = _prompt_path("Trade behavior log path")
+                _run_with_pause(cmd_import_trades, _ns(csv=csv_path, portfolio=source, output=output, log=log))
+        elif choice == "6":
+            log = _prompt_path("Trade behavior log path")
+            limit = input("Recent entry limit [20]: ").strip() or "20"
+            _run_with_pause(cmd_trade_log, _ns(log=log, limit=limit))
+        elif choice == "7":
             _run_with_pause(cmd_portfolio, _ns(portfolio=None))
         elif choice == "q":
             return
@@ -315,4 +333,3 @@ def cmd_menu(_: argparse.Namespace) -> None:
 def register_menu_command(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     menu_parser = subparsers.add_parser("menu", aliases=["ui"], help="start interactive menu UI")
     menu_parser.set_defaults(func=cmd_menu)
-

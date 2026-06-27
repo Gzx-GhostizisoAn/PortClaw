@@ -47,7 +47,6 @@ def cmd_holdings_wizard(args: argparse.Namespace) -> None:
         sector = prompt_text("Sector", "Unknown")
         quantity = prompt_float("Quantity", 0.0)
         average_cost = prompt_float("Average cost", 0.0)
-        market_price = prompt_float("Latest/market price", average_cost)
         try:
             positions.append(
                 normalize_position(
@@ -57,7 +56,6 @@ def cmd_holdings_wizard(args: argparse.Namespace) -> None:
                         "sector": sector,
                         "quantity": quantity,
                         "average_cost": average_cost,
-                        "market_price": market_price,
                     }
                 )
             )
@@ -89,7 +87,7 @@ def _print_positions(positions: list[dict[str, object]]) -> None:
     for index, item in enumerate(positions, start=1):
         print(
             f"{index}. {item['symbol']} | {item['name']} | {item['sector']} | "
-            f"qty={item['quantity']} | cost={item['average_cost']} | price={item['market_price']}"
+            f"qty={item['quantity']} | cost={item['average_cost']}"
         )
 
 

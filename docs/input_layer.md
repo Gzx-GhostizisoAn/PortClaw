@@ -37,12 +37,11 @@ These files describe what the user holds and what the agent should scan.
 
 ```json
 {
-  "symbol": "AAPL",
-  "name": "Apple Inc.",
-  "sector": "Technology",
-  "quantity": 10,
-  "average_cost": 175.0,
-  "market_price": 210.0
+  "symbol": "SYMBOL",
+  "name": "Asset name",
+  "sector": "Sector",
+  "quantity": 0,
+  "average_cost": 0.0
 }
 ```
 
@@ -51,16 +50,20 @@ Meaning:
 - `symbol`: ticker or asset identifier.
 - `quantity`: how many shares or units the user holds.
 - `average_cost`: private cost basis.
-- `market_price`: latest price used by the local demo adapter.
 - `sector`: used for exposure analysis.
 
 The agent calculates:
 
 ```text
-market_value = quantity * market_price
+close_price = latest completed close from the configured market data provider
+market_value = quantity * close_price
 unrealized_pnl = market_value - quantity * average_cost
 weight = market_value / total_portfolio_value
 ```
+
+Users should not maintain live stock prices in the holdings file. If provider
+history is unavailable, PortClaw marks return metrics as unavailable and only
+uses cost basis as a conservative fallback for structure displays.
 
 ## Watchlist
 
@@ -68,11 +71,11 @@ weight = market_value / total_portfolio_value
 
 ```json
 {
-  "symbol": "NVDA",
-  "latest_price": 1160.0,
-  "moving_average_20d": 1120.0,
-  "moving_average_60d": 1080.0,
-  "volatility_20d": 0.039
+  "symbol": "SYMBOL",
+  "latest_price": 0.0,
+  "moving_average_20d": 0.0,
+  "moving_average_60d": 0.0,
+  "volatility_20d": 0.0
 }
 ```
 

@@ -84,6 +84,7 @@ class LocalFinanceAgent:
             f"- total_market_value: {snapshot.total_market_value:.2f}",
             f"- market_data_provider: {snapshot.metadata.get('market_data_provider', self.config.market_data.provider)}",
             f"- daily_return: {_format_pct(calculate_daily_return(snapshot))}",
+            f"- trade_ledger: {_format_trade_ledger(snapshot.metadata.get('trade_ledger', {}))}",
             "",
             "Positions are the assets the user currently holds:",
         ]
@@ -105,8 +106,9 @@ class LocalFinanceAgent:
                 f"- Edit {portfolio_path} or run `python agent.py holdings`.",
                 "- quantity is how many shares/units are held.",
                 "- average_cost is the user's private cost basis.",
-                "- market_price is overwritten by configured market data when the adapter succeeds.",
-                "- if market data fails, the agent falls back to the local market_price.",
+                "- market_price is a derived runtime field from configured market data, not a user-maintained holding input.",
+                "- users do not maintain live market_price in holdings; if market data fails, return metrics are unavailable and structure displays use cost basis as a fallback.",
+                "- import trade rows with `python agent.py import-trades --csv data/trade_template.csv` to update quantity, cash, cost basis, and behavior logs.",
                 "- watchlist entries are not holdings; they are only scanned for strategy candidates.",
             ]
         )
@@ -181,6 +183,17 @@ def _format_pct(value: float | None) -> str:
     return "unknown" if value is None else f"{value:.2%}"
 
 
+def _format_trade_ledger(trade_ledger: dict[str, object]) -> str:
+    if not trade_ledger:
+        return "not synced from trade rows"
+    return (
+        f"last_synced_at={trade_ledger.get('last_synced_at', 'unknown')}, "
+        f"last_import_count={trade_ledger.get('last_import_count', 0)}, "
+        f"cumulative_realized_pnl={float(trade_ledger.get('cumulative_realized_pnl', 0.0)):.2f}, "
+        f"log={trade_ledger.get('trade_log', 'unknown')}"
+    )
+
+
 def build_data_source_status(
     config: AgentConfig,
     snapshot,
@@ -215,7 +228,7 @@ def _market_data_status(config: AgentConfig, snapshot, asset_metrics) -> DataSou
         for field_name, source in field_sources.items():
             if source == "provider_history":
                 used_fields.add(f"positions.{field_name}")
-            elif source == "portfolio_file_fallback":
+            elif source in {"portfolio_file_fallback", "cost_basis_fallback"}:
                 fallback_fields.add(f"positions.{field_name}")
 
     for metric in asset_metrics:
@@ -230,14 +243,14 @@ def _market_data_status(config: AgentConfig, snapshot, asset_metrics) -> DataSou
 
     if provider_symbols and fallback_symbols:
         status = "partial"
-        note = "Some symbols used provider history; others fell back to local portfolio values."
+        note = "Some symbols used provider history; others used cost basis fallback for structure displays."
     elif provider_symbols:
         status = "ok"
         note = "Market price, previous close, daily P&L, and history-based metrics used provider history where available."
     else:
         status = "fallback"
         fallback_fields.update({"positions.market_price", "portfolio.total_market_value", "portfolio.total_return", "asset_metrics"})
-        note = "No requested symbols returned usable provider history; local portfolio values were used."
+        note = "No requested symbols returned usable provider history; return metrics are unavailable and cost basis is used only for structure displays."
 
     if not snapshot.positions:
         status = "empty"

@@ -1,3 +1,1 @@
-symbol,name,sector,quantity,average_cost,market_price
-AAPL,Apple Inc.,Technology,10,175,210
-MSFT,Microsoft Corp.,Technology,6,380,420
+symbol,name,sector,quantity,average_cost

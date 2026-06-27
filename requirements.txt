@@ -4,6 +4,12 @@ pandas>=2.2.0
 numpy>=1.26.0
 python-dotenv>=1.0.1
 
+# Optional desktop shell. Used by `desktop_app.py` to open PortClaw in a native app window.
+pywebview>=6.2.0
+
+# Optional packaging tool. Used by `scripts/build_pyinstaller_app.sh` to create a standalone macOS app.
+pyinstaller>=6.21.0
+
 # Optional LLM client. Needed when using qwen/openai/deepseek/openai_compatible instead of local_template.
 openai>=1.40.0
 
@@ -12,6 +18,7 @@ yfinance>=0.2.40
 
 # HTTP client used by credentialed REST data adapters such as FRED, FMP, EODHD, Twelve Data, and Alpha Vantage.
 requests>=2.32.0
+beautifulsoup4>=4.12.0
 
 # Planned market-data adapter libraries. They are listed here so a full local install has the expected clients available.
 akshare>=1.16.0

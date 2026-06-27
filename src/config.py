@@ -5,11 +5,16 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*_: object, **__: object) -> bool:
+        return False
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+PROJECT_ROOT = Path(os.getenv("PORTCLAW_HOME", Path(__file__).resolve().parents[1])).resolve()
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "local_config.json"
 
 SUPPORTED_LLM_PROVIDERS: Dict[str, Dict[str, object]] = {
@@ -196,6 +201,18 @@ class MarketDataConfig(BaseModel):
     mode: str = "local"
 
 
+class NewsConfig(BaseModel):
+    provider: str = "auto"
+    lookback: str = "7d"
+
+
+class AppUIConfig(BaseModel):
+    language: str = "zh-CN"
+    onboarding_completed: bool = False
+    cache_policy: str = "standard"
+    timezone: str = "Asia/Shanghai"
+
+
 class StorageConfig(BaseModel):
     audit_dir: str = "audit_runs"
     message_dir: str = "messages"
@@ -230,6 +247,8 @@ class AgentConfig(BaseModel):
         ]
     )
     market_data: MarketDataConfig = Field(default_factory=MarketDataConfig)
+    news: NewsConfig = Field(default_factory=NewsConfig)
+    app: AppUIConfig = Field(default_factory=AppUIConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     risk_preferences: RiskPreferences = Field(default_factory=RiskPreferences)
 

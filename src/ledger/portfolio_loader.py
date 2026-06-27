@@ -33,7 +33,8 @@ def load_portfolio_snapshot(
         history_price = _latest_history_price(history_result)
         previous_close = _previous_history_close(history_result)
         market_data_ok = bool(history_result and history_result.ok)
-        market_price = history_price if history_price is not None else float(item["market_price"])
+        fallback_price = float(item.get("average_cost") or 0.0)
+        market_price = history_price if history_price is not None else fallback_price
         market_value = quantity * market_price
         cost = quantity * average_cost
         daily_pnl = quantity * (market_price - previous_close) if previous_close is not None else None
@@ -51,11 +52,11 @@ def load_portfolio_snapshot(
                         "market_data_provider": history_result.provider if history_result else config.market_data.provider,
                         "market_data_error": history_result.error if history_result else None,
                         "field_sources": {
-                            "market_price": "provider_history" if history_price is not None else "portfolio_file_fallback",
+                            "market_price": "provider_history" if history_price is not None else "cost_basis_fallback",
                             "previous_close": "provider_history" if previous_close is not None else "unavailable",
                             "daily_pnl": "provider_history" if previous_close is not None else "unavailable",
-                            "market_value": "provider_history" if market_data_ok else "portfolio_file_fallback",
-                            "unrealized_pnl": "provider_history" if market_data_ok else "portfolio_file_fallback",
+                            "market_value": "provider_history" if market_data_ok else "cost_basis_fallback",
+                            "unrealized_pnl": "provider_history" if market_data_ok else "cost_basis_fallback",
                         },
                     },
                 ),
@@ -74,6 +75,15 @@ def load_portfolio_snapshot(
     for position in positions:
         position.weight = (position.market_value or 0.0) / total_market_value if total_market_value else 0.0
 
+    portfolio_metadata = dict(data.get("metadata", {}))
+    portfolio_metadata.update(
+        {
+            "source": str(path),
+            "market_data_provider": config.market_data.provider,
+            "requested_symbols": position_symbols + watchlist_symbols,
+        }
+    )
+
     snapshot = PortfolioSnapshot(
         snapshot_id=f"snapshot_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
         user_id=data.get("user_id", config.user_id),
@@ -83,11 +93,7 @@ def load_portfolio_snapshot(
         cash=float(data.get("cash", 0.0)),
         total_market_value=total_market_value,
         total_cost=total_cost,
-        metadata={
-            "source": str(path),
-            "market_data_provider": config.market_data.provider,
-            "requested_symbols": position_symbols + watchlist_symbols,
-        },
+        metadata=portfolio_metadata,
     )
 
     asset_metrics = []
@@ -148,7 +154,7 @@ def _fallback_position_metrics(position: Position, error: str | None) -> AssetMe
         moving_average_60d=price * 0.94 if price else None,
         metadata={
             "latest_price": position.market_price,
-            "metric_source": "portfolio_file_fallback",
+            "metric_source": "cost_basis_fallback",
             "market_data_error": error,
         },
     )

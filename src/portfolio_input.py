@@ -18,7 +18,6 @@ FIELD_ALIASES = {
     "sector": ["sector", "industry", "行业", "板块"],
     "quantity": ["quantity", "qty", "shares", "持仓数量", "数量", "股票余额", "证券余额"],
     "average_cost": ["average_cost", "avg_cost", "cost", "成本价", "持仓成本", "成本"],
-    "market_price": ["market_price", "price", "last_price", "最新价", "现价", "市价", "当前价"],
 }
 
 
@@ -54,15 +53,12 @@ def normalize_position(raw: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("symbol is required")
     quantity = _to_float(raw.get("quantity"), "quantity")
     average_cost = _to_float(raw.get("average_cost"), "average_cost")
-    market_price = raw.get("market_price")
-    market_price = average_cost if market_price in {None, ""} else _to_float(market_price, "market_price")
     return {
         "symbol": symbol,
         "name": str(raw.get("name", "")).strip() or symbol,
         "sector": str(raw.get("sector", "")).strip() or "Unknown",
         "quantity": quantity,
         "average_cost": average_cost,
-        "market_price": market_price,
     }
 
 
@@ -90,9 +86,7 @@ def import_positions_from_csv(path: Path) -> List[Dict[str, Any]]:
 def write_csv_template(path: Path = CSV_TEMPLATE_PATH) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = [
-        ["symbol", "name", "sector", "quantity", "average_cost", "market_price"],
-        ["AAPL", "Apple Inc.", "Technology", "10", "175", "210"],
-        ["MSFT", "Microsoft Corp.", "Technology", "6", "380", "420"],
+        ["symbol", "name", "sector", "quantity", "average_cost"],
     ]
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)

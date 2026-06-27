@@ -1,0 +1,52 @@
+#!/bin/zsh
+set -u
+
+PROJECT_DIR="$HOME/Library/Application Support/PortClaw/app"
+APP_URL="http://127.0.0.1:8765"
+LOG_DIR="$HOME/Library/Logs/PortClaw"
+LOG_FILE="$LOG_DIR/app.log"
+STAMP="$(/bin/date '+%Y-%m-%d %H:%M:%S')"
+
+/bin/mkdir -p "$LOG_DIR"
+
+if [[ ! -f "$PROJECT_DIR/app.py" ]]; then
+  /usr/bin/osascript -e 'display alert "PortClaw" message "PortClaw runtime was not found. Run scripts/build_macos_app.sh from the source checkout first."'
+  exit 1
+fi
+
+cd "$PROJECT_DIR" || {
+  /usr/bin/osascript -e 'display alert "PortClaw" message "Cannot enter PortClaw runtime directory."'
+  exit 1
+}
+
+if [[ -x "$PROJECT_DIR/.venv/bin/python" ]]; then
+  PYTHON="$PROJECT_DIR/.venv/bin/python"
+elif [[ -x "/opt/homebrew/opt/python@3.11/libexec/bin/python3" ]]; then
+  PYTHON="/opt/homebrew/opt/python@3.11/libexec/bin/python3"
+elif [[ -x "/opt/homebrew/bin/python3" ]]; then
+  PYTHON="/opt/homebrew/bin/python3"
+elif [[ -x "/usr/local/bin/python3" ]]; then
+  PYTHON="/usr/local/bin/python3"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON="$(command -v python3)"
+else
+  /usr/bin/osascript -e 'display alert "PortClaw" message "python3 was not found."'
+  exit 1
+fi
+
+"$PYTHON" -c 'import pydantic, pandas, numpy, dotenv, webview' >> "$LOG_FILE" 2>&1 || {
+  /usr/bin/osascript -e 'display alert "PortClaw" message "Python dependencies are missing. Open Terminal in the PortClaw source checkout and run: python -m pip install -r requirements.txt"'
+  exit 1
+}
+
+{
+  echo
+  echo "[$STAMP] Starting PortClaw"
+  echo "Project: $PROJECT_DIR"
+  echo "Python: $PYTHON"
+echo "Mode: pywebview desktop window"
+echo "URL: $APP_URL"
+} >> "$LOG_FILE"
+
+/usr/bin/osascript -e 'display notification "Opening desktop workspace..." with title "PortClaw"'
+exec "$PYTHON" desktop_app.py >> "$LOG_FILE" 2>&1
